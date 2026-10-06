@@ -1,0 +1,1582 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Envío automático de OC</title>
+<!--
+  MAQUETA INTERACTIVA — Envío automático de Purchase Order (OC) al proveedor
+  Referencia funcional: "FLUJO DE COMPRAS ENVIO DE OC AUTOMATICO.pdf"
+
+  Es un prototipo 100% front-end: no hay backend, base de datos, SAP, APIs ni envío real de correos.
+  Todos los datos (proveedores, contactos, compras, OCs) son ficticios.
+
+  Mapa de vistas vs. PDF
+    Pág. 2  Suppliers (lista + General Information + Contacts + Evaluations)   -> vista "suppliers"
+    Pág. 3  Purchasing > Settings > EMAIL BODY (Material/Asset/Services/Comex, English/Spanish,
+            editor, sección gris condicional)                                   -> vista "settings" / tab "email"
+    Pág. 4  Purchasing > Settings > MONTHLY CLOSING DATE (Month / Closing Date) -> vista "settings" / tab "closing"
+    Pág. 5  Purchase ID: Paso 1 (ORDERS + abre carpeta del PC) y Paso 2 (IN TRANSIT) -> vista "purchase"
+    Pág. 6  Paso 3: modal "Select Purchase Order to Send" + Continue             -> modal "select"
+    Pág. 7  "Send Purchase Order": To, Cc, Subject, Message, Purchase Order, SEND -> modal "send"
+
+  Decisiones tomadas donde el PDF/requerimiento es ambiguo (buscar "DECISIÓN" en el código):
+    D1  El idioma del correo se toma del campo "Language" del proveedor (pág. 2) y puede cambiarse en el formulario.
+    D2  La "Fecha Límite de Recepción" del cuerpo sale de Monthly Closing Date: día de cierre del mes en curso;
+        si ya pasó, el del mes siguiente. Si el día no existe en el mes (ej. 30 de febrero) se usa el último día.
+    D3  El destino "Es-Metals 1" se lee del campo "Delivery Location" de la compra (pág. 5). La regla
+        (campo + valor) es parametrizable por tipo de compra en EMAIL BODY.
+    D4  Cada OC cargada en ORDERS se asocia a un proveedor de la requisición. En "Select Purchase Order to Send" se elige UNA OC por envío;
+        las demás quedan pendientes y se envían después con el mismo botón.
+    D5  To: por defecto todos los contactos registrados del proveedor de la OC (se pueden quitar); el desplegable ofrece todos los
+        contactos (primero los de proveedores de la requisición) y permite escribir un correo.
+    D6  Cc: creador de la compra (Requested by) + comprador (Buyer) + WAREHOUSE@es-metals.com si el tipo es
+        Material o Asset (regla del PDF, pág. 7).
+    D7  El estado pasa a "In Transit" cuando se envía al menos una OC. Si quedan OCs pendientes, el botón
+        IN TRANSIT permite enviarlas después.
+    D8  Subject según pág. 7: "APROBACIÓN COTIZACIÓN C.I ES METALS//REQ.(n° req)//OC (n° OC)", editable por
+        tipo/idioma en configuración.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Saira+Semi+Condensed:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --primary:#1976d2; --primary-d:#115ea8; --primary-l:#e3eefa;
+  --bg:#f4f4f4; --panel:#fff; --rail:#efefef; --line:#e0e0e0; --line2:#cfcfcf;
+  --text:#212121; --muted:#6f6f6f; --muted2:#9e9e9e;
+  --danger:#e53935; --ok:#2e7d32; --ok-l:#e8f5e9; --warn:#ed6c02; --warn-l:#fff4e5;
+  --cond:#cbd3de; --cond-b:#9aa8bb;
+  --radius:6px; --shadow:0 8px 28px rgba(0,0,0,.18);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.45 Roboto,system-ui,Segoe UI,Arial,sans-serif;overflow-x:hidden}
+button{font:inherit;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit}
+svg.i{width:20px;height:20px;fill:currentColor;flex:none;vertical-align:middle}
+.app{display:grid;grid-template-rows:1fr;grid-template-columns:minmax(0,1fr);min-height:100vh}
+
+/* Header */
+header.top{display:flex;align-items:center;gap:16px;padding:10px 20px;background:#fafafa;border-bottom:1px solid var(--line)}
+.logo{display:flex;align-items:center;gap:8px;font-family:'Saira Semi Condensed',sans-serif;font-weight:700;font-size:22px;letter-spacing:.5px;color:#1d3557}
+.logo .mark{width:22px;height:22px;border:2.5px solid #1d3557;position:relative;overflow:hidden}
+.logo .mark:after{content:"";position:absolute;left:-4px;top:9px;width:34px;height:2.5px;background:#1d3557;transform:rotate(-45deg)}
+.top .sp{flex:1}
+.top-search{display:flex;align-items:center;gap:6px;border:1px solid #bdbdbd;border-radius:20px;padding:4px 12px;color:var(--muted2);width:220px;background:#fff}
+.top-search input{border:0;outline:0;width:100%;background:none}
+.iconbtn{background:none;border:0;padding:6px;border-radius:50%;color:#555;position:relative;display:inline-flex}
+.iconbtn:hover{background:#0000000d}
+.badge{position:absolute;top:0;right:0;background:var(--danger);color:#fff;font-size:10px;border-radius:9px;padding:0 5px;line-height:16px}
+
+/* Guide bar */
+.guide{background:#fff;border-bottom:1px solid var(--line);padding:8px 20px 10px}
+.guide-row{display:flex;align-items:center;gap:10px}
+.guide-title{font-size:11px;font-weight:700;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;white-space:nowrap}
+.steps{display:flex;flex-wrap:wrap;gap:4px;overflow-x:auto;flex:1;min-width:0;padding:2px 0;scrollbar-width:thin}
+.step{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fafafa;border-radius:16px;padding:3px 10px 3px 4px;font-size:12px;white-space:nowrap;color:var(--muted)}
+.step b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#e0e0e0;color:#555;font-size:11px}
+.step.done{color:var(--ok)} .step.done b{background:var(--ok);color:#fff}
+.step.cur{border-color:var(--primary);background:var(--primary-l);color:var(--primary);font-weight:500}
+.step.cur b{background:var(--primary);color:#fff}
+.step.nav{cursor:pointer} .step.nav:hover{border-color:var(--primary)}
+.step-arrow{color:#bbb;font-size:11px;align-self:center}
+.hint{margin-top:6px;font-size:13px;color:#37474f;display:flex;gap:8px;align-items:flex-start}
+.hint svg{color:var(--primary);width:18px;height:18px;margin-top:1px}
+.proto-tag{font-size:11px;background:var(--warn-l);color:#8a4b00;border:1px solid #ffd8a8;border-radius:4px;padding:2px 8px;white-space:nowrap}
+.linkbtn{background:none;border:0;color:var(--primary);font-size:12px;padding:2px 4px;white-space:nowrap}
+.linkbtn:hover{text-decoration:underline}
+
+/* Body */
+.main{display:grid;grid-template-columns:64px minmax(0,1fr);min-height:0}
+nav.rail{background:var(--rail);display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 0;border-right:1px solid var(--line)}
+.rail .brand{font-size:8px;font-weight:700;color:#9e9e9e;letter-spacing:.3px;margin-bottom:8px}
+.rail button{width:44px;height:44px;border:0;border-radius:8px;background:none;color:#616161;display:grid;place-items:center;position:relative}
+.rail button:hover{background:#00000010}
+.rail button.on{color:var(--primary);background:#fff;box-shadow:0 1px 3px #0001}
+.rail .tip{position:absolute;left:52px;background:#424242;color:#fff;font-size:11px;padding:3px 8px;border-radius:4px;white-space:nowrap;opacity:0;pointer-events:none;z-index:5}
+.rail button:hover .tip{opacity:1}
+.rail .grow{flex:1}
+.content{padding:16px 20px;min-width:0}
+footer{display:flex;justify-content:space-between;padding:6px 20px;font-size:12px;color:#555;background:#fafafa;border-top:1px solid var(--line)}
+
+/* Generic */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.tabs{display:flex;background:#eaeaea;border-radius:var(--radius) var(--radius) 0 0}
+.tab{border:0;background:none;padding:12px 20px;font-size:13px;font-weight:600;letter-spacing:.6px;color:#8a8a8a;text-transform:uppercase;font-family:'Open Sans',Roboto,sans-serif}
+.tab.on{background:#fff;color:var(--primary)}
+.btn{display:inline-flex;align-items:center;gap:6px;border:0;border-radius:20px;padding:7px 18px;font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase;background:var(--primary);color:#fff}
+.btn:hover{background:var(--primary-d)}
+.btn:disabled{background:#e0e0e0;color:#a0a0a0;cursor:not-allowed}
+.btn.ghost{background:#fff;color:var(--primary);border:1px solid var(--primary)}
+.btn.ghost:hover{background:var(--primary-l)}
+.btn.grey{background:#e0e0e0;color:#757575}
+.btn.lg{padding:10px 26px;font-size:15px}
+.btn.sm{padding:4px 12px;font-size:11px}
+.btn.ok{background:var(--ok)}
+.fab{width:30px;height:30px;border-radius:50%;border:0;background:var(--primary);color:#fff;display:inline-grid;place-items:center;flex:none}
+.fab:hover{background:var(--primary-d)} .fab svg{width:18px;height:18px}
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:16px;background:#eee;padding:3px 10px;font-size:12px;max-width:100%}
+.chip .x{border:0;background:#9e9e9e;color:#fff;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;padding:0;flex:none}
+.chip .x svg{width:12px;height:12px}
+.status{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;border-radius:12px;padding:2px 10px;white-space:nowrap}
+.status:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.st-approved{background:#e3f2fd;color:#1565c0}
+.st-transit{background:var(--ok-l);color:var(--ok)}
+.st-pending{background:var(--warn-l);color:#a85500}
+.st-sent{background:var(--ok-l);color:var(--ok)}
+.muted{color:var(--muted)} .small{font-size:12px}
+.toggle{position:relative;width:34px;height:18px;flex:none;display:inline-block}
+.toggle input{opacity:0;width:0;height:0}
+.toggle span{position:absolute;inset:0;background:#cfcfcf;border-radius:9px;transition:.15s;cursor:pointer}
+.toggle span:before{content:"";position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0003;transition:.15s}
+.toggle input:checked+span{background:#90caf9}
+.toggle input:checked+span:before{transform:translateX(16px);background:var(--primary)}
+.avatar{width:32px;height:32px;border-radius:50%;background:#e8e8e8;display:inline-grid;place-items:center;font-weight:700;font-size:12px;color:#333;flex:none}
+table.t{width:100%;border-collapse:collapse;font-size:13px}
+table.t th{font-size:11px;font-weight:600;color:#555;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);background:#fafafa;white-space:nowrap}
+table.t td{padding:9px 10px;border-bottom:1px solid #eee;vertical-align:middle}
+table.t tr.click{cursor:pointer} table.t tr.click:hover td{background:#f5f9fe}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.tablewrap{overflow-x:auto}
+.callout{display:flex;gap:10px;align-items:flex-start;background:var(--primary-l);border:1px solid #bbd5f3;color:#0d3c6e;border-radius:var(--radius);padding:10px 12px;font-size:13px}
+.callout svg{color:var(--primary);margin-top:1px}
+.callout.warn{background:var(--warn-l);border-color:#ffd8a8;color:#663c00} .callout.warn svg{color:var(--warn)}
+.flag{display:inline-block;width:22px;height:22px;border-radius:50%;overflow:hidden;vertical-align:middle;box-shadow:0 0 0 1px #0002;flex:none}
+.flag.es{background:linear-gradient(#fcd116 0 50%,#003893 50% 75%,#ce1126 75%)}
+.flag.en{background:linear-gradient(90deg,#3c3b6e 0 45%,transparent 45%),repeating-linear-gradient(#b22234 0 2.6px,#fff 2.6px 5.2px)}
+.flag.en{background:linear-gradient(#3c3b6e,#3c3b6e) 0 0/45% 54% no-repeat,repeating-linear-gradient(#b22234 0 3.1px,#fff 3.1px 6.2px)}
+
+.flag.co{background:linear-gradient(#fcd116 0 50%,#003893 50% 75%,#ce1126 75%)}
+.flag.us{background:linear-gradient(#3c3b6e,#3c3b6e) 0 0/45% 54% no-repeat,repeating-linear-gradient(#b22234 0 3.1px,#fff 3.1px 6.2px)}
+.flag.mx{background:linear-gradient(90deg,#006847 0 33.3%,#fff 33.3% 66.6%,#ce1126 66.6%)}
+.flag.esp{background:linear-gradient(#aa151b 0 25%,#f1bf00 25% 75%,#aa151b 75%)}
+.cchip{border:0;background:none;padding:2px 4px 2px 0;border-radius:18px;cursor:pointer;color:var(--text);font-family:inherit}
+.cchip:hover{background:#eef3fb;color:var(--primary)}
+/* Contact Information (ventana de la aplicación) */
+.modal.cinfo{width:min(560px,100%)}
+.ci-head{display:flex;align-items:center;gap:14px;padding:18px 20px 0}
+.ci-head h3{margin:0;font-size:24px;font-weight:500;flex:1}
+.ci-head .close{border:0;background:none;color:var(--primary);display:flex;padding:2px}
+.ci-head .close svg{width:24px;height:24px}
+.ci-act{color:var(--primary)} .ci-act svg{width:24px;height:24px}
+.ci-avatar{display:grid;place-items:center;margin:-8px 0 14px;color:var(--primary)}
+.ci-avatar svg{width:118px;height:118px}
+.ci-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px 26px}
+.ci-f{display:flex;align-items:flex-end;gap:10px;min-width:0}
+.ci-f.full{grid-column:1/-1}
+.ci-f>svg{color:#9e9e9e;width:22px;height:22px;margin-bottom:6px}
+.ci-f label{flex:1;min-width:0;display:block}
+.ci-f label span{display:block;font-size:10px;color:#777;min-height:13px}
+.ci-f input{width:100%;border:0;border-bottom:1px dashed #9e9e9e;padding:4px 0 6px;font-size:16px;color:#8a8a8a;outline:0;background:none}
+.ci-f select{border:0;background:none;font-size:12px;color:#777;width:20px;padding:0;margin-bottom:8px;cursor:pointer}
+.ci-f select:disabled{cursor:default;opacity:.8}
+.ci-f.cphone .flag{width:24px;height:16px;border-radius:2px;margin-bottom:8px}
+.editing .ci-f input{border-bottom:1px solid #757575;color:var(--text)}
+.editing .ci-f input:focus{border-bottom:2px solid var(--primary)}
+@media (max-width:640px){ .ci-grid{grid-template-columns:1fr} }
+
+/* Pestaña de compra abierta + detalle */
+.purtabs .rtab{display:inline-flex;align-items:center;gap:8px;color:#888}
+.purtabs .rtab.on{color:var(--primary)}
+.purtabs .rtab .tx{display:inline-flex;border-radius:50%;padding:2px;color:#999}
+.purtabs .rtab .tx:hover{background:#0001;color:#333}
+.purtabs .rtab .tx svg{width:16px;height:16px}
+.pdet{background:#fff;padding:0 16px 16px}
+.pdet .po-head{padding:14px 4px 12px;border-bottom:1px solid var(--line);margin-bottom:6px}
+.pdet .po-head h2{font-size:26px;font-weight:700}
+.frow{display:grid;gap:14px 22px;padding:12px 4px 4px}
+.frow.r5{grid-template-columns:.9fr 1.3fr 1.3fr .9fr 1fr}
+.frow.r3{grid-template-columns:minmax(0,1fr) 2fr}
+.f .val,.f select,.f input,.f textarea{font-size:17px}
+.f textarea{display:block;width:100%;border:0;background:none;padding:3px 0 5px;outline:0;resize:vertical;font-family:inherit}
+.condnote{display:flex;align-items:center;gap:6px;font-size:12px;padding:6px 4px 0 calc(66%)}
+.docgrid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px 26px;padding:14px 4px 4px;align-items:center}
+.docgrid .lb{font-weight:500;font-size:16px;color:#333}
+.docgrid .orders-box{padding:4px 8px;margin:-4px -8px}
+.pdet .items{margin:24px 0 0;background:#efefef;border-radius:0}
+.pdet .items .cap{display:flex;justify-content:space-between;align-items:center;padding:30px 22px 18px;font-size:16px;font-weight:500}
+.pdet .items .cap .btn.lg{border-radius:24px;box-shadow:0 2px 4px #0003}
+table.it th{background:transparent;color:#333;font-size:14px;font-weight:700;padding:12px 14px;border-bottom:1px solid #ccc}
+table.it .irow td{background:#efefef;font-size:16px;padding:6px 14px;border-bottom:1px solid #ddd}
+table.it .c{text-align:center} table.it .nw{white-space:nowrap}
+table.it .irow td b{font-weight:500}
+table.it .qrow td{background:#fff;padding:18px 44px;border-bottom:1px solid #ddd}
+.qbox{border:1px solid #e3e3e3;border-radius:4px}
+.qbox table.t th{background:#fff;color:#444;font-size:13px;font-weight:700;padding:14px 12px;text-align:left;white-space:normal}
+.qbox table.t td{font-size:15px;padding:14px 12px;border:0}
+.qbox .c{text-align:center}
+.qchk{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:3px;background:#9e9e9e;color:#fff}
+.qchk svg{width:16px;height:16px}
+.pdet .items .total{padding:16px 20px;font-size:16px;font-weight:700;border-top:1px solid #ddd}
+.pdet .actions{padding:18px 4px}
+.pdet .log{margin:4px 0 8px}
+@media (max-width:1100px){ .frow.r5{grid-template-columns:1fr 1fr} .docgrid{grid-template-columns:1fr} .condnote{padding-left:4px} }
+@media (max-width:640px){ .frow.r5,.frow.r3{grid-template-columns:1fr} .pdet{padding:0 12px 12px} table.it .qrow td{padding:10px} }
+
+.btn.danger{background:#e53935;color:#fff;box-shadow:0 2px 4px #0003} .btn.danger:hover{background:#c62828}
+.btn.off{background:#e0e0e0;color:#a0a0a0;box-shadow:none}
+.ochip .fx{border:0;background:#616161;color:#fff;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;padding:0}
+.ochip .fx svg{width:12px;height:12px}
+.pdet .ochip{border:0;background:#eef1f5;padding:3px 8px}
+/* Ventana "Purchase Order" del ítem */
+.modal.pom{width:min(520px,100%)}
+.pom .mh{border-bottom:0;padding-bottom:6px}
+.pom .mh h3{font-size:20px}
+.pom-f{display:flex;align-items:flex-end;gap:12px;margin:0 0 22px}
+.pom-f>svg{color:#555;margin-bottom:6px}
+.pom-f label{flex:1;display:block}
+.pom-f label span{display:block;font-size:10px;color:#777;min-height:12px}
+.pom-f input,.pom-f textarea{width:100%;border:0;border-bottom:1px solid #9e9e9e;padding:4px 0 6px;font-size:15px;outline:0;font-family:inherit;background:none}
+.pom-f input:focus,.pom-f textarea:focus{border-bottom:2px solid var(--primary)}
+.pom-f textarea{resize:vertical;min-height:70px}
+.pom .mf{border-top:0}
+
+.posel{width:100%;border:1px solid #333;border-radius:8px;padding:10px 12px;font-size:15px;background:#fff;cursor:pointer;margin:6px 0 4px}
+.posel:focus{outline:2px solid var(--primary);outline-offset:1px}
+
+/* Secciones condicionales (Purchasing › Settings › Email body) */
+.condshead{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin:22px 0 8px;flex-wrap:wrap}
+.condshead h4{margin:0 0 2px;font-size:14px}
+.condbox{margin-bottom:12px}
+.condbar .cname{border:0;border-bottom:1px solid transparent;background:transparent;font-weight:700;font-size:13px;padding:2px 4px;min-width:220px;outline:0}
+.condbar .cname:hover{border-bottom-color:#8796ab}
+.condbar .cname:focus{border-bottom-color:var(--primary);background:#fff}
+.condlocs{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px dashed var(--cond-b);font-size:12px;color:#1f2d3d}
+.lchip{display:inline-flex;align-items:center;gap:4px;border:1px solid #8796ab;background:#fff;color:#455a64;border-radius:14px;padding:3px 10px;font-size:12px}
+.lchip svg{width:14px;height:14px;display:none}
+.lchip.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.lchip.on svg{display:inline}
+.condempty{border:1px dashed #ccc;border-radius:4px;padding:14px;text-align:center;color:var(--muted);font-size:13px}
+.editor:empty:before{content:attr(data-ph);color:#90a4ae}
+
+table.ct input.cdate{width:100%;text-align:left;border:1px solid transparent;border-radius:3px;padding:3px 6px;font:inherit;background:transparent;cursor:pointer}
+table.ct input.cdate:hover{border-color:#ccc;background:#fff}
+table.ct input.cdate:focus{border-color:var(--primary);background:#fff;outline:0}
+table.ct input.cdate.bad{border-color:var(--danger);background:#fdecea}
+
+/* Condicional compartido: tabla compacta y neutral */
+.ctitle{font-weight:700;font-size:14px;margin:24px 0 6px}
+.ctab{width:100%;border-collapse:collapse;font-size:13px;border-top:1px solid var(--line)}
+.ctab th{text-align:left;font-size:11px;font-weight:600;color:#666;padding:8px 10px;border-bottom:1px solid var(--line)}
+.ctab td{padding:9px 10px;border-bottom:1px solid #eee;vertical-align:middle}
+.ctab tr.off td:not(:nth-child(3)){color:#9e9e9e}
+.cprev{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45}
+.locsum{white-space:nowrap}
+.cstate{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.cstate .lbl{font-size:12px;color:#555}
+.cact{text-align:right;white-space:nowrap}
+.cact .iconbtn svg{width:18px;height:18px;color:#616161}
+.ctab tr.cedit td{background:#fafafa;padding:12px 10px}
+.cedit-grid{display:grid;grid-template-columns:90px minmax(0,1fr);gap:10px 14px;align-items:start}
+.ce-l{font-size:12px;color:#666;padding-top:7px}
+.ce-text{border:1px solid #d0d0d0;border-radius:4px;background:#fff;min-height:90px;padding:8px 10px}
+.ce-text:focus{border-color:var(--primary)}
+.locdd{position:relative;max-width:340px}
+.locfield{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid #d0d0d0;border-radius:4px;background:#fff;padding:6px 10px;font-size:13px;text-align:left;color:var(--text)}
+.locfield svg{width:18px;height:18px;color:#666}
+.loclist{display:none;position:absolute;left:0;right:0;top:calc(100% + 2px);background:#fff;border:1px solid #d0d0d0;border-radius:4px;box-shadow:var(--shadow);z-index:20;max-height:240px;overflow:auto;padding:4px 0}
+.locdd.open .loclist{display:block}
+.locopt{display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:13px;cursor:pointer}
+.locopt:hover{background:#f5f5f5}
+.locopt input{accent-color:var(--primary)}
+.cedit-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+
+/* Send Purchase Order (pág. 7 del PDF) */
+.modal.sendpo{width:min(620px,100%)}
+.sendpo .mh{border-bottom:0;padding:16px 20px 4px}
+.sendpo .mh h3{font-size:17px}
+.sendpo .mb{padding:4px 22px 6px}
+.sp-f{border-bottom:1px solid #9e9e9e;padding:8px 0 2px;margin-bottom:10px;position:relative}
+.sp-f>label{display:block;font-size:10.5px;color:#777}
+.sp-f.cc .chipfield{min-height:70px;align-content:flex-start}
+.sendpo .chipfield{min-height:30px;padding:2px 24px 2px 0}
+.sendpo .chipfield input{min-width:120px;font-size:13px}
+.sendpo .ec{background:#eef1f5;border:0;border-radius:14px;padding:2px 4px 2px 10px;font-size:12px}
+.sendpo .subj{font-size:12.5px;padding:3px 0 5px}
+.sp-msg{margin-top:6px}
+.sendpo .msg{min-height:140px;font-size:12.5px;line-height:1.5;padding:6px 2px;color:#333}
+.sendpo .msg:empty:before{content:attr(data-ph);color:#9e9e9e;font-size:15px}
+.sendpo .cond-sec{background:none;border:0;border-radius:0;padding:0;margin:0}
+.sp-att{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 0 4px}
+.sp-att .lb{font-weight:700;color:#777;font-size:13px}
+.sp-att .doclink{cursor:pointer;max-width:320px}
+.sp-file{border:1px solid #ccc;border-radius:4px;font-size:12px;padding:2px 4px;max-width:200px}
+.sp-foot{display:flex;justify-content:flex-end;padding:8px 22px 18px}
+.sp-foot .btn{padding:6px 20px;font-size:13px}
+
+/* Purchases list (pantalla Requests de la aplicación) */
+.pur{margin:-16px -20px 0}
+.purtabs{display:flex;background:#e2e2e2;overflow-x:auto;padding-left:40px;scrollbar-width:thin}
+.purtabs button{border:0;background:none;padding:16px 18px;font-size:15px;font-weight:500;letter-spacing:.8px;text-transform:uppercase;color:#c4c4c4;white-space:nowrap}
+.purtabs button:hover{color:#999}
+.purtabs button.on{background:#f4f4f4;color:var(--primary)}
+.purbox{background:#fff;margin:8px 16px 0;border:1px solid var(--line);border-radius:4px}
+.purbar{display:flex;align-items:center;gap:12px;padding:30px 16px 20px;background:#efefef;flex-wrap:wrap}
+.purseg{display:flex;background:#f6f6f6;border-radius:4px;overflow:hidden}
+.purseg button{border:0;background:none;padding:11px 14px;font-size:14px;font-weight:500;letter-spacing:.8px;text-transform:uppercase;color:#333}
+.purseg button.on{background:#dcdcdc}
+.purbar .btn.lg{border-radius:24px;padding:11px 22px;box-shadow:0 2px 4px #0003}
+table.pt th{background:#efefef;font-size:13px;font-weight:700;color:#333;padding:12px 16px 8px;vertical-align:bottom;border-bottom:1px solid #ddd}
+table.pt td{font-size:15px;padding:8px 16px;border-bottom:1px solid #e3e3e3;line-height:1.55}
+table.pt .c{text-align:center}
+table.pt .nw{white-space:nowrap}
+table.pt td b{font-weight:500}
+.pill{display:inline-block;border-radius:18px;padding:6px 14px;color:#fff;font-size:17px;font-weight:500;white-space:nowrap;line-height:1.3}
+.pill.sm{font-size:12px;padding:3px 12px}
+.p-blue{background:var(--primary)} .p-green{background:#43a047} .p-transit{background:#00897b}
+.purfoot{display:flex;justify-content:flex-end;align-items:center;gap:36px;padding:14px 24px;font-size:13px;color:#333}
+.purfoot span{display:inline-flex;align-items:center;gap:6px}
+@media (max-width:640px){ .pur{margin:-12px -16px 0} .purtabs{padding-left:0} .purbox{margin:8px 0 0} table.pt td{font-size:13px} .pill{font-size:13px} }
+
+/* Suppliers */
+.split{display:grid;grid-template-columns:340px 1fr;gap:0;min-height:560px}
+.split>.left{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.searchrow{display:flex;gap:10px;align-items:center;padding:14px 16px 8px}
+.pill-input{flex:1;display:flex;align-items:center;gap:8px;background:#eee;border-radius:20px;padding:7px 14px;color:#777}
+.pill-input input{border:0;background:none;outline:0;width:100%}
+.filterrow{display:flex;align-items:center;justify-content:space-between;padding:4px 16px 12px;border-bottom:1px solid var(--line);font-size:11px;color:#555}
+.filterrow label{display:flex;align-items:center;gap:8px}
+.suplist{overflow:auto;flex:1;max-height:640px}
+.sup{display:flex;gap:14px;align-items:center;padding:14px 16px;border-bottom:1px solid #f0f0f0;cursor:pointer}
+.sup:hover{background:#f7f7f7}
+.sup.on{background:#e3eefa}
+.sup .bico{width:42px;height:42px;border-radius:50%;background:#757575;color:#fff;display:grid;place-items:center;flex:none}
+.sup .nm{font-size:14px;color:#333;text-transform:uppercase}
+.sup.on .nm{color:var(--primary)}
+.sup .ct{font-size:12px;color:#666;display:flex;align-items:center;gap:4px;margin-top:3px}
+.sup .ct svg{width:15px;height:15px}
+.sup .cnt{margin-left:auto;font-size:11px;color:var(--muted);text-align:right;white-space:nowrap}
+.detail{padding:14px 18px;min-width:0}
+.dhead{display:flex;align-items:center;gap:12px;padding:12px 4px 14px;border-bottom:1px solid var(--line)}
+.dhead h2{margin:0;font-size:19px;font-weight:500}
+.dhead .ico{color:#9e9e9e}
+.infogrid{display:grid;grid-template-columns:150px 1fr;gap:10px 16px;padding:16px 4px;font-size:13px;border-bottom:1px solid var(--line)}
+.infogrid .k{color:#555}
+.cchips{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.cchip{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:12px}
+.cchip .avatar{width:28px;height:28px}
+.sectionhead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 4px 8px}
+.sectionhead h3{margin:0;font-size:16px;font-weight:600}
+.evals{margin-top:18px;background:#f0f0f0;border-radius:var(--radius);padding:12px}
+.evals h3{margin:4px 6px 10px;font-size:22px;font-weight:700}
+
+/* Settings */
+.settings{display:grid;grid-template-columns:260px 1fr;gap:16px}
+.setnav{padding:10px}
+.setnav .grp{border:1px solid var(--line2);border-radius:4px;padding:10px 12px}
+.setnav .grp h4{margin:0 0 6px;font-weight:400;font-size:16px;font-family:'Open Sans',sans-serif}
+.setnav .it{display:flex;align-items:center;gap:6px;font-size:13px;color:#333;padding:3px 8px;border-radius:4px;background:var(--primary-l)}
+.setnav .it svg{width:15px;height:15px}
+.typerow{display:flex;flex-wrap:wrap;gap:18px;padding:12px 18px;border-bottom:1px solid var(--line);font-size:12px;font-weight:600;font-family:'Open Sans',sans-serif}
+.typerow label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.typerow input{accent-color:var(--primary)}
+.cfghead{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--line)}
+.cfghead h3{margin:0;font-family:'Open Sans',sans-serif;font-size:16px;font-weight:700;letter-spacing:.3px}
+.langtabs{display:flex;justify-content:flex-end;gap:4px;padding:10px 18px 0}
+.langtabs button{border:0;background:none;padding:8px 12px;font-size:12px;font-weight:700;color:#777;border-bottom:2px solid transparent;display:flex;align-items:center;gap:6px}
+.langtabs button.on{color:var(--primary);border-color:var(--primary)}
+.langtabs .flag{width:16px;height:16px}
+.cfgbody{display:grid;grid-template-columns:1fr 250px;gap:18px;padding:12px 18px 20px}
+.subjrow label{display:block;font-size:11px;color:#777}
+.subjrow .inp{width:100%;border:0;border-bottom:1px solid #949494;padding:6px 0;outline:0;font-weight:600;font-family:'Open Sans',sans-serif;font-size:13px}
+.subjrow .inp:focus{border-bottom:2px solid var(--primary)}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:6px 4px;border-bottom:1px solid var(--line);margin-top:14px}
+.toolbar button{border:0;background:none;min-width:28px;height:28px;border-radius:4px;color:#444;font-weight:700;font-size:14px}
+.toolbar button:hover{background:#eee}
+.toolbar select{border:0;background:none;font-size:12px;padding:4px}
+.toolbar .sep{width:1px;height:18px;background:#ddd;margin:0 4px}
+.editor{min-height:120px;padding:12px 6px;outline:0;font-family:'Open Sans',sans-serif;font-size:13px;line-height:1.55}
+.editor:focus{background:#fcfdff}
+.editor ul{margin:6px 0;padding-left:22px}
+.editor p{margin:0 0 8px}
+.var{display:inline-block;background:#e8f0fe;color:#1a56b8;border:1px solid #b6cdf5;border-radius:4px;padding:0 5px;font-family:Consolas,monospace;font-size:12px;line-height:18px;white-space:nowrap}
+.condbox{background:var(--cond);border:1px dashed var(--cond-b);border-radius:4px;margin-top:6px}
+.condbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;background:#b9c4d3;font-size:12px;color:#1f2d3d;border-radius:4px 4px 0 0}
+.condbar select{border:1px solid #8796ab;border-radius:4px;padding:2px 6px;background:#fff;font-size:12px}
+.condbar .lbl{font-weight:700;display:flex;align-items:center;gap:6px}
+.condbox .editor{background:transparent}
+.condbox.off{opacity:.55}
+.varpanel{border-left:1px solid var(--line);padding-left:16px}
+.varpanel h4{margin:0 0 6px;font-size:13px}
+.varpanel .vlist{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.varpanel .vlist button{border:0;background:none;padding:0;text-align:left;display:flex;flex-direction:column;gap:2px}
+.varpanel .vlist button:hover .var{background:#d4e3fd}
+.varpanel .vlist small{color:var(--muted);font-size:11px}
+.closing-wrap{padding:18px;max-width:460px}
+table.ct{border-collapse:collapse;width:100%;font-family:'Open Sans',sans-serif;font-size:13px}
+table.ct th{background:#e6e6e6;border:1px solid #cfcfcf;padding:6px 10px;font-size:12px}
+table.ct td{border:1px solid #d8d8d8;padding:3px 10px}
+table.ct tr.cur td{background:#e3eefa}
+table.ct input{width:64px;border:1px solid transparent;border-radius:3px;padding:3px 6px;text-align:right;background:transparent;outline:0}
+table.ct input:hover{border-color:#ccc;background:#fff}
+table.ct input:focus{border-color:var(--primary);background:#fff}
+table.ct input.bad{border-color:var(--danger);background:#fdecea}
+.kpi{border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;background:#fafafa}
+.kpi .v{font-size:22px;font-weight:700;color:var(--primary);margin:4px 0}
+
+/* Purchases */
+.pagehead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.pagehead h1{margin:0;font-size:20px;font-weight:500}
+.po-head{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.po-head h2{margin:0;font-size:20px;font-weight:700}
+.po-head .x{color:var(--primary)}
+.fgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,.8fr);gap:14px 26px;padding:16px 20px}
+.f{display:flex;align-items:flex-end;gap:8px;min-width:0}
+.f>svg{color:#555;margin-bottom:6px}
+.f .fi{flex:1;min-width:0;border-bottom:1px solid #949494}
+.f label{display:block;font-size:10px;color:#777;line-height:1.2}
+.f .val,.f select,.f input{display:block;width:100%;border:0;background:none;padding:3px 0 5px;font-size:14px;outline:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.f select{cursor:pointer}
+.f.hl .fi{border-bottom:2px solid var(--warn)}
+.f .tag{font-size:10px;color:#a85500;margin-top:3px;display:block}
+.docrow{display:flex;flex-wrap:wrap;align-items:center;gap:10px 28px;padding:4px 20px 14px}
+.docs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.docs .lb{font-weight:700;font-size:12px}
+.doclink{display:inline-flex;align-items:center;gap:4px;color:var(--primary);font-size:12px;text-decoration:underline;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doclink svg{width:15px;height:15px}
+.orders-box{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1.5px solid transparent;border-radius:6px;padding:6px 8px}
+.ochip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line2);border-radius:6px;padding:4px 6px 4px 8px;background:#fff;font-size:12px}
+.ochip select{border:1px solid #ddd;border-radius:4px;font-size:12px;padding:1px 4px;max-width:180px}
+.items{background:#ececec;margin:6px 20px 0;border-radius:4px}
+.items .cap{padding:16px 14px 6px;font-weight:700;font-size:12px}
+.items table.t th{background:transparent;color:#444;border-bottom:0}
+.items table.t td{border-bottom:1px solid #dcdcdc;background:#fff}
+.items .total{padding:12px 14px;text-align:right;font-weight:700;font-size:13px}
+.actions{display:flex;justify-content:space-between;align-items:center;padding:20px;gap:10px;flex-wrap:wrap}
+.transit-wrap{display:flex;align-items:center;gap:10px;border:1.5px solid transparent;border-radius:24px;padding:3px}
+.log{margin:4px 20px 20px}
+
+/* Modals */
+.overlay{position:fixed;inset:0;background:rgba(20,24,30,.42);display:grid;place-items:center;padding:16px;overflow:auto}
+.modal{background:#fff;border-radius:8px;box-shadow:var(--shadow);width:min(480px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column}
+.modal.lg{width:min(1120px,100%)}
+.modal.md{width:min(640px,100%)}
+.mh{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.mh h3{margin:0;font-size:17px;font-weight:700;font-family:'Open Sans',sans-serif;flex:1}
+.mh .close{border:0;background:none;color:var(--primary);padding:2px;display:flex}
+.mb{padding:16px 20px;overflow:auto}
+.mf{display:flex;justify-content:flex-end;gap:10px;padding:12px 20px;border-top:1px solid var(--line);flex-wrap:wrap;align-items:center}
+.mf .left{margin-right:auto}
+.frm{display:grid;gap:12px}
+.frm label{font-size:12px;color:#555;display:grid;gap:4px}
+.frm input[type=text],.frm input[type=email],.frm select{border:1px solid #c8c8c8;border-radius:4px;padding:8px 10px;outline:0}
+.frm input:focus,.frm select:focus{border-color:var(--primary)}
+.frm .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.err{color:var(--danger);font-size:12px}
+
+/* File picker (Windows-like) */
+.picker{width:min(760px,100%)}
+.pk-path{display:flex;align-items:center;gap:6px;font-size:12px;color:#333;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;padding:6px 10px;margin-bottom:10px}
+.pk-grid{display:grid;grid-template-columns:160px 1fr;border:1px solid #ddd;border-radius:4px;min-height:260px}
+.pk-side{background:#fafafa;border-right:1px solid #ddd;padding:8px;font-size:12px}
+.pk-side div{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:4px;color:#444}
+.pk-side div.on{background:#dbe9f8}
+.pk-side svg{width:16px;height:16px;color:#e9b33b}
+.pk-list table.t td{padding:6px 10px;cursor:pointer}
+.pk-list tr.sel td{background:#cce4f7}
+.pk-list .fic{color:#d32f2f;width:18px;height:18px}
+
+/* Select PO */
+.selbox{border:1px solid #333;border-radius:8px;padding:9px 12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;margin:6px 0 0;background:#fff}
+.sellist{border:1px solid var(--line2);border-top:0;border-radius:0 0 8px 8px;max-height:260px;overflow:auto}
+.selitem{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-bottom:1px solid #eee;cursor:pointer}
+.selitem:hover{background:#f6f9fd}
+.selitem input{margin-top:3px;accent-color:var(--primary);width:16px;height:16px}
+.selitem .po{font-weight:700}
+.selitem.disabled{opacity:.55;cursor:not-allowed}
+
+/* Send form */
+.sendgrid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:0}
+.sendform{padding:4px 20px 16px;min-width:0}
+.why{background:#f7f9fc;border-left:1px solid var(--line);padding:14px 16px;font-size:12.5px;min-width:0}
+.why h4{margin:0 0 10px;font-size:13px;display:flex;align-items:center;gap:6px}
+.rule{border:1px solid var(--line);background:#fff;border-radius:6px;padding:9px 10px;margin-bottom:9px}
+.rule .rt{font-weight:700;font-size:12px;margin-bottom:3px;display:flex;align-items:center;justify-content:space-between;gap:6px}
+.rule .rd{color:#455a64}
+.rule ul{margin:4px 0 0;padding-left:16px}
+.rule li.no{color:#9e9e9e;text-decoration:line-through}
+.rule select{border:1px solid #bbb;border-radius:4px;padding:3px 6px;font-size:12px;width:100%;margin-top:6px}
+.rule.cond{border-color:var(--cond-b);background:#eef1f5}
+.seg{display:inline-flex;border:1px solid var(--primary);border-radius:14px;overflow:hidden}
+.seg button{border:0;background:#fff;color:var(--primary);font-size:11px;font-weight:700;padding:3px 10px}
+.seg button.on{background:var(--primary);color:#fff}
+.inc{font-size:11px;font-weight:700;border-radius:10px;padding:1px 8px}
+.inc.yes{background:var(--ok-l);color:var(--ok)} .inc.no{background:#eceff1;color:#607d8b}
+.potabs{display:flex;gap:6px;padding:10px 20px 0;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.potab{border:1px solid var(--line);border-bottom:0;background:#f5f5f5;border-radius:6px 6px 0 0;padding:7px 12px;font-size:12px;color:#555;display:flex;align-items:center;gap:6px}
+.potab.on{background:#fff;color:var(--primary);font-weight:700;border-color:var(--primary);position:relative;top:1px}
+.mfield{border-bottom:1px solid #9e9e9e;padding:10px 0 4px;position:relative}
+.mfield.boxed{border:1px solid transparent}
+.mfield>label{font-size:10.5px;color:#777;display:flex;justify-content:space-between;gap:6px}
+.mfield>label .src{color:var(--primary);font-size:10.5px}
+.chipfield{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:34px;padding:4px 26px 4px 0;cursor:text;position:relative}
+.chipfield input{border:0;outline:0;min-width:160px;flex:1;padding:4px 0;font-size:13px}
+.chipfield .caret{position:absolute;right:0;top:8px;color:#666;border:0;background:none;padding:0}
+.ec{display:inline-flex;align-items:center;gap:6px;background:#eef3fb;border:1px solid #d3e1f5;border-radius:16px;padding:2px 4px 2px 3px;font-size:12px;max-width:100%}
+.ec .avatar{width:20px;height:20px;font-size:9px;background:#c7dbf5;color:#0d47a1}
+.ec .em{color:#555}
+.ec .why-tag{font-size:10px;color:#fff;background:#78909c;border-radius:8px;padding:0 6px}
+.ec .x{border:0;background:none;color:#777;padding:0 2px;display:flex}
+.ec .x svg{width:14px;height:14px}
+.ec.typed{background:#fff8e1;border-color:#ffe082}
+.dd{position:absolute;left:0;right:0;top:100%;background:#fff;border:1px solid var(--line2);border-radius:6px;box-shadow:var(--shadow);z-index:20;max-height:300px;overflow:auto}
+.dd .g{font-size:10.5px;font-weight:700;color:#777;text-transform:uppercase;letter-spacing:.4px;padding:8px 12px 4px;background:#fafafa;border-bottom:1px solid #eee;position:sticky;top:0}
+.dd .o{display:grid;grid-template-columns:18px minmax(0,auto) minmax(0,1fr) auto;gap:10px;align-items:center;justify-items:start;padding:7px 12px;cursor:pointer;font-size:13px;text-align:left}
+.dd .o b,.dd .o .em{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.dd .o:hover{background:#f1f6fd}
+.dd .o input{accent-color:var(--primary)}
+.dd .o .em{color:#777;font-size:12px}
+.dd .o .sp{margin-left:auto;font-size:11px;color:var(--muted)}
+.subj{width:100%;border:0;outline:0;font-weight:700;font-family:'Open Sans',sans-serif;font-size:13px;padding:4px 0}
+.msg{min-height:220px;padding:10px 2px;outline:0;font-family:'Open Sans',sans-serif;font-size:13px;line-height:1.55}
+.msg ul{margin:6px 0;padding-left:22px}
+.msg p{margin:0 0 8px}
+.cond-sec{background:var(--cond);border-radius:4px;padding:8px 12px 10px;margin-top:10px;position:relative;border:1px solid var(--cond-b)}
+.cond-tag{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:700;color:#fff;background:#5c6f88;border-radius:10px;padding:1px 9px;margin-bottom:6px;font-family:Roboto,sans-serif;user-select:none}
+.cond-omit{border:1px dashed #b0bec5;color:#78909c;border-radius:4px;padding:8px 12px;margin-top:10px;font-size:12px;font-family:Roboto,sans-serif;background:repeating-linear-gradient(45deg,#fafafa 0 8px,#f2f4f6 8px 16px);user-select:none}
+.attach{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0 4px}
+.attach .lb{font-weight:700;color:#777;font-size:13px}
+.filecard{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line2);border-radius:6px;padding:6px 10px;font-size:12px;background:#fff}
+.filecard svg{color:#d32f2f}
+.review-item{border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px}
+.review-item h4{margin:0 0 8px;font-size:14px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.rgrid{display:grid;grid-template-columns:90px 1fr;gap:5px 10px;font-size:12.5px}
+.rgrid .k{color:#777}
+.success-ico{width:60px;height:60px;border-radius:50%;background:var(--ok-l);color:var(--ok);display:grid;place-items:center;margin:4px auto 10px}
+.success-ico svg{width:34px;height:34px}
+.sent-line{border:1px solid #c8e6c9;background:#f6fbf6;border-radius:6px;padding:10px 12px;margin-bottom:10px}
+.sent-line p{margin:0 0 6px;font-weight:500}
+.flowchg{display:flex;align-items:center;justify-content:center;gap:10px;margin:14px 0 4px}
+.spinner{width:36px;height:36px;border:4px solid #e3eefa;border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;margin:10px auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Toast */
+#toasts{position:fixed;right:16px;bottom:44px;display:flex;flex-direction:column;gap:8px;z-index:999}
+.toast{background:#323232;color:#fff;border-radius:6px;padding:10px 14px;font-size:13px;box-shadow:var(--shadow);max-width:380px;display:flex;gap:8px;align-items:flex-start}
+.toast.ok{background:#1b5e20} .toast.warn{background:#8a4b00}
+.toast svg{width:18px;height:18px}
+
+/* Responsive */
+@media (max-width:1100px){
+  .fgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .cfgbody{grid-template-columns:1fr}
+  .varpanel{border-left:0;padding-left:0;border-top:1px solid var(--line);padding-top:12px}
+  .varpanel .vlist{flex-direction:row;flex-wrap:wrap}
+  .sendgrid{grid-template-columns:1fr}
+  .why{border-left:0;border-top:1px solid var(--line)}
+}
+@media (max-width:860px){
+  .split{grid-template-columns:1fr}
+  .split>.left{border-right:0;border-bottom:1px solid var(--line)}
+  .suplist{max-height:260px}
+  .settings{grid-template-columns:1fr}
+  .closing-wrap{grid-template-columns:1fr}
+  .top-search{display:none}
+  .steps{flex-wrap:nowrap}
+}
+@media (max-width:640px){
+  header.top{padding:8px 16px}
+  .logo{font-size:18px}
+  .guide{padding:8px 16px}
+  .main{grid-template-columns:52px minmax(0,1fr)}
+  .rail button{width:40px;height:40px}
+  .content{padding:12px 16px}
+  .fgrid{grid-template-columns:1fr;padding:12px 16px}
+  .docrow,.po-head,.actions{padding-left:16px;padding-right:16px}
+  .items{margin:6px 16px 0}
+  .log{margin:4px 16px 16px}
+  .infogrid{grid-template-columns:110px 1fr}
+  .frm .row2{grid-template-columns:1fr}
+  .pk-grid{grid-template-columns:1fr}.pk-side{display:none}
+  footer{flex-direction:column;gap:2px;padding:6px 16px}
+  .proto-tag{display:none}
+}
+</style>
+</head>
+<body>
+<div class="app guide-on" id="app">
+  <div class="main">
+    <nav class="rail" id="rail"></nav>
+    <main class="content" id="content"></main>
+  </div>
+</div>
+<div id="modals"></div>
+<input type="file" id="po-file" accept=".pdf,application/pdf" multiple hidden>
+<div id="toasts"></div>
+
+<script>
+/* =========================================================================
+   ICONOS (Material Icons, paths 24x24)
+   ========================================================================= */
+const P = {
+  business:"M12 7V3H2v18h20V7H12zM6 19H4v-2h2v2zm0-4H4v-2h2v2zm0-4H4V9h2v2zm0-4H4V5h2v2zm4 12H8v-2h2v2zm0-4H8v-2h2v2zm0-4H8V9h2v2zm0-4H8V5h2v2zm10 12h-8v-2h2v-2h-2v-2h2v-2h-2V9h8v10zm-2-8h-2v2h2v-2zm0 4h-2v2h2v-2z",
+  place:"M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z",
+  search:"M15.5 14h-.79l-.28-.27A6.471 6.471 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z",
+  add:"M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
+  close:"M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
+  gear:"M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z",
+  receipt:"M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-2h2v2zm0-4H7v-2h2v2zm0-4H7V7h2v2zm8 8h-6v-2h6v2zm0-4h-6v-2h6v2zm0-4h-6V7h6v2z",
+  people:"M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z",
+  attach:"M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 015 0v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5a2.5 2.5 0 005 0V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z",
+  check:"M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
+  send:"M2.01 21L23 12 2.01 3 2 10l15 2-15 2z",
+  truck:"M20 8h-3V4H3c-1.1 0-2 .9-2 2v11h2c0 1.66 1.34 3 3 3s3-1.34 3-3h6c0 1.66 1.34 3 3 3s3-1.34 3-3h2v-5l-3-4zM6 18.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm13.5-9l1.96 2.5H17V9.5h2.5zm-1.5 9c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z",
+  calendar:"M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20a2 2 0 002 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11z",
+  person:"M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z",
+  badge:"M20 7h-5V4c0-1.1-.9-2-2-2h-2c-1.1 0-2 .9-2 2v3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2zM9 12c.83 0 1.5.67 1.5 1.5S9.83 15 9 15s-1.5-.67-1.5-1.5S8.17 12 9 12zm3 6H6v-.75c0-1 2-1.5 3-1.5s3 .5 3 1.5V18zm1-9h-2V4h2v5zm5 7.5h-4V15h4v1.5zm0-3h-4V12h4v1.5z",
+  notes:"M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z",
+  list:"M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z",
+  barcode:"M2 6h2v12H2zm3 0h1v12H5zm2 0h3v12H7zm4 0h1v12h-1zm3 0h2v12h-2zm3 0h1v12h-1zm2 0h3v12h-3z",
+  doc:"M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z",
+  down:"M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z",
+  info:"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z",
+  del:"M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+  logout:"M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5a2 2 0 00-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 002 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z",
+  folder:"M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z",
+  mail:"M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z",
+  more:"M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z",
+  arrow:"M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z",
+  warehouse:"M22 21V7L12 3 2 7v14h5v-9h10v9h5zm-11-2H9v2h2v-2zm2-3h-2v2h2v-2zm2 3h-2v2h2v-2z",
+  rule:"M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z",
+  lang:"M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0014.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z",
+  account:"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2a7.2 7.2 0 01-6-3.22c.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08a7.2 7.2 0 01-6 3.22z",
+  edit:"M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 000-1.41l-2.34-2.34a.996.996 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+  globe:"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z",
+  note:"M22 10l-6-6H4c-1.1 0-2 .9-2 2v12.01c0 1.1.9 1.99 2 1.99l16-.01c1.1 0 2-.89 2-1.99v-8zm-7-4.5l5.5 5.5H15V5.5z",
+  upload:"M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z",
+  eye:"M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z",
+  tool:"M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z",
+};
+const ic = (n, extra='') => `<svg class="i" ${extra} viewBox="0 0 24 24"><path d="${P[n]}"/></svg>`;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = n => '$' + Math.round(n).toLocaleString('en-US');
+const initials = n => n.split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase();
+const isEmail = s => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+
+/* =========================================================================
+   DATOS FICTICIOS
+   ========================================================================= */
+const TYPES = ['Material','Asset','Services','Comex Services'];   // tipos de compra (pág. 3)
+const LOCATIONS = ['Es-Metals 1','Es-Metals 2','Bogotá – Oficina principal','Cartagena – Bodega puerto'];
+const WAREHOUSE = 'WAREHOUSE@es-metals.com';                     // pág. 7
+const INVOICE_MAIL = 'facturaelectronica@es-metals.com';           // pág. 3 (texto del cuerpo)
+
+const USERS = {
+  dpalacio:{name:'Daniela Palacio', email:'daniela.palacio@es-metals.example', role:'Buyer'},
+  aasuad:  {name:'Andrea Asuad',    email:'andrea.asuad@es-metals.example',    role:'Buyer'},
+  secheverri:{name:'Sara Echeverri', email:'sara.echeverri@es-metals.example', role:'Requester'},
+  dguevara:{name:'Daniela Guevara', email:'daniela.guevara@es-metals.example', role:'Requester'},
+};
+
+// Contacto con los campos de la ventana "Contact Information" de la aplicación
+const ct = (name, email, role, code, phone, country, state, city) => ({name, email, role, code, phone, code2:code, phone2:'', country, state, city, note:''});
+const PHONE_CODES = [['+57','co','Colombia'],['+1','us','United States'],['+52','mx','Mexico'],['+34','esp','Spain']];
+
+const S = {
+  suppliers:[
+    {id:'s1', name:'ABC Industrial Supplies', city:'Houston', currency:'USD', lang:'en', sap:true, active:true, contacts:[
+      ct('John Smith','john.smith@example.com','Sales Manager','+1','713 555 0142','United States','Texas','Houston'),
+      ct('Maria Johnson','maria.johnson@example.com','Accounts Receivable','+1','713 555 0178','United States','Texas','Houston'),
+      ct('Robert Lee','robert.lee@example.com','Logistics Coordinator','+1','713 555 0119','United States','Texas','Houston')]},
+    {id:'s2', name:'Aceros del Norte S.A.S.', city:'Barranquilla', currency:'COP', lang:'es', sap:true, active:true, contacts:[
+      ct('Andrés Rojas','andres.rojas@example.com','Ejecutivo Comercial','+57','300 555 0141','Colombia','Atlántico','Barranquilla'),
+      ct('Paula Méndez','paula.mendez@example.com','Cartera','+57','300 555 0187','Colombia','Atlántico','Barranquilla')]},
+    {id:'s3', name:'TecnoServicios Andinos S.A.S.', city:'Bogota', currency:'COP', lang:'es', sap:false, active:true, contacts:[
+      ct('Camila Torres','camila.torres@example.com','Coordinadora de Servicios','+57','310 555 0163','Colombia','Bogota','Bogota')]},
+    {id:'s4', name:'Global Logistics Partners LLC', city:'Miami', currency:'USD', lang:'en', sap:true, active:true, contacts:[
+      ct('Kevin Brown','kevin.brown@example.com','Account Executive','+1','305 555 0127','United States','Florida','Miami'),
+      ct('Emily Davis','emily.davis@example.com','Customs Specialist','+1','305 555 0193','United States','Florida','Miami')]},
+    {id:'s5', name:'Ferretería Industrial El Puerto S.A.S.', city:'Cartagena', currency:'COP', lang:'es', sap:false, active:true, contacts:[
+      ct('Luis Herrera','luis.herrera@example.com','Asesor Comercial','+57','315 555 0152','Colombia','Bolívar','Cartagena'),
+      ct('Diana Pérez','diana.perez@example.com','Facturación','+57','315 555 0108','Colombia','Bolívar','Cartagena')]},
+  ],
+  reqs:[
+    {id:16625, reqDate:'2026-10-02 09:42:18', type:'Material', project:'Project 2026-045', pm:'Carlos Ramírez', sap:'PA-045', offer:'OF-2026-118', due:'2026-10-16 07:00:01',
+     buyer:'dpalacio', requestedBy:'secheverri', delivery:'Es-Metals 1', imp:'NO', notes:'QUOTE 1182', status:'Purchasing',
+     attached:['Especificaciones_tecnicas_045.pdf'], quotes:['Cotizacion_ABC_Q-8812.pdf','Cotizacion_AcerosNorte_2219.pdf'], files:[], sent:{}, log:[],
+     items:[
+      {code:'MAT-0412', item:'Lámina acero inoxidable 304 cal. 3 mm', qty:40, price:685000, sup:'s2', contact:'Andrés Rojas', notes:'Corte a medida'},
+      {code:'MAT-0388', item:'Tubo estructural cuadrado 2" x 6 m', qty:120, price:98500, sup:'s2', contact:'Andrés Rojas', notes:''},
+      {code:'MAT-1021', item:'Electrodo E7018 1/8" (caja 20 kg)', qty:15, price:412000, sup:'s1', contact:'John Smith', notes:''},
+      {code:'MAT-1105', item:'Disco de corte 7" x 1/16" (caja x25)', qty:10, price:186000, sup:'s1', contact:'John Smith', notes:'Urgente'}]},
+    {id:16631, reqDate:'2026-10-03 11:15:40', type:'Services', project:'Project 2026-051', pm:'Juliana Ortiz', sap:'PA-051', offer:'OF-2026-131', due:'2026-10-20 07:00:01',
+     buyer:'aasuad', requestedBy:'dguevara', delivery:'Bogotá – Oficina principal', imp:'NO', notes:'QUOTE 665,01', status:'Purchasing',
+     attached:['Alcance_mantenimiento.pdf'], quotes:['Cotizacion_TecnoServicios_665.pdf'], files:[], sent:{}, log:[],
+     items:[{code:'SRV-0090', item:'Mantenimiento preventivo puente grúa 10 t', qty:1, price:8022309, sup:'s3', contact:'Camila Torres', notes:'Infraestructura'}]},
+    {id:16640, reqDate:'2026-10-05 08:27:05', type:'Comex Services', project:'Project 2026-047', pm:'Carlos Ramírez', sap:'PA-047', offer:'', due:'2026-10-28 07:00:01',
+     buyer:'dpalacio', requestedBy:'dguevara', delivery:'Es-Metals 1', imp:'YES', notes:'Import BL-77821', status:'Purchasing',
+     attached:[], quotes:['Quote_GLP_2026-311.pdf'], files:[], sent:{}, log:[],
+     items:[{code:'CMX-0012', item:'Agenciamiento aduanero y transporte internacional', qty:1, price:14350000, sup:'s4', contact:'Kevin Brown', notes:'Contenedor 40"'}]},
+    {id:16590, reqDate:'2026-09-18 14:03:51', type:'Asset', project:'Project 2026-038', pm:'Juliana Ortiz', sap:'PA-038', offer:'OF-2026-097', due:'2026-09-30 07:00:01',
+     buyer:'aasuad', requestedBy:'secheverri', delivery:'Es-Metals 2', imp:'NO', notes:'', status:'In Transit',
+     attached:[], quotes:['Cotizacion_ABC_Q-8790.pdf'],
+     files:[{file:'OC 4501680119 ABC.pdf', size:'184 KB'}], sent:{'4501680119':true},
+     log:[{at:'2026-09-22 10:41', po:'4501680119', sup:'s1', to:['john.smith@example.com'], cc:['sara.echeverri@es-metals.example','andrea.asuad@es-metals.example',WAREHOUSE], subject:'QUOTATION APPROVAL C.I ES METALS//REQ.16590//PO 4501680119', cond:false}],
+     items:[{code:'ACT-0031', item:'Compresor de aire industrial 50 HP', qty:1, price:96500000, sup:'s1', contact:'John Smith', notes:'', order:{number:'4501680119', due:'2026-09-30', notes:''}}]},
+  ],
+  closing:[20,26,30,27,27,27,27,30,21,30,30,27],   // pág. 4
+  cfg:{},  // se llena abajo
+  // estado de UI
+  view:'suppliers', selSup:'s1', supQ:'', sapOnly:false,
+  setTab:'email', cfgType:'Material', cfgLang:'es', cfgDirty:false,
+  closingDraft:null, reqId:null, modals:[], dd:null, guide:true, visited:new Set(['suppliers']),
+};
+
+/* ---- Plantillas de correo (pág. 3). Texto base del PDF + variables ---- */
+const V = s => `{{${s}}}`;
+const BODY_ES = (intro) => `<p>Buenas tardes, ${V('SUPPLIER_CONTACT')}.</p>
+<p>${intro}, les solicitamos cumplir estrictamente con los siguientes requisitos:</p>
+<ul>
+<li>📅 Fecha Límite de Recepción: ${V('CLOSING_DATE')}.</li>
+<li>🔄 Sincronización de Periodo: El servicio o material debe ser entregado dentro del mismo mes/periodo de emisión de la factura.</li>
+<li>🔢 Referencia Obligatoria: Es indispensable incluir el número de OC ${V('PO_NUMBER')} impreso en su factura para su validación.</li>
+<li>📧 Canal de Envío: Remitir el documento digital únicamente a: <u>${INVOICE_MAIL}</u></li>
+</ul>
+<p>Nota: El cumplimiento de estos puntos es esencial para evitar devoluciones en el trámite administrativo.<br>Agradecemos de antemano su colaboración y puntualidad.<br>Gracias.</p>`;
+const BODY_EN = (intro) => `<p>Good afternoon, ${V('SUPPLIER_CONTACT')}.</p>
+<p>${intro}. We kindly ask you to strictly comply with the following requirements:</p>
+<ul>
+<li>📅 Receipt Deadline: ${V('CLOSING_DATE')}.</li>
+<li>🔄 Period Synchronization: The service or material must be delivered within the same month/period in which the invoice is issued.</li>
+<li>🔢 Mandatory Reference: Purchase Order number ${V('PO_NUMBER')} must be printed on your invoice for validation.</li>
+<li>📧 Submission Channel: Send the digital document only to: <u>${INVOICE_MAIL}</u></li>
+</ul>
+<p>Note: Compliance with these points is essential to avoid rejections in the administrative process.<br>Thank you in advance for your cooperation and punctuality.<br>Thank you.</p>`;
+// Sección gris del PDF: solo aplica cuando la compra es para Es-Metals 1
+const COND_ES = `<p>Por favor, ten en cuenta los siguientes puntos si el transporte es realizado por un conductor propio o un tercero contratado:</p>
+<p>1. Documentos requeridos para autorizar el ingreso:<br>- Licencia de conducción.<br>- Tarjeta de propiedad del vehículo.<br>- SOAT vigente.<br>- Certificación de la seguridad social completa y vigente.<br>- Foto de la cédula de identidad (ambos lados).</p>`;
+const COND_EN = `<p>Please consider the following points if transportation is carried out by your own driver or a contracted third party:</p>
+<p>1. Documents required to authorize entry:<br>- Driver's license.<br>- Vehicle registration card.<br>- Valid SOAT (mandatory vehicle insurance).<br>- Complete and current social security certification.<br>- Photo of the ID card (both sides).</p>`;
+const INTRO = {
+  Material: {es:`Adjunto la Orden de Compra ${V('PO_NUMBER')} correspondiente al proyecto ${V('PROJECT')} para su gestión`,
+             en:`Please find attached Purchase Order ${V('PO_NUMBER')} for project ${V('PROJECT')} for your processing`},
+  Asset:    {es:`Adjunto la Orden de Compra ${V('PO_NUMBER')} del activo solicitado para el proyecto ${V('PROJECT')} para su gestión`,
+             en:`Please find attached Purchase Order ${V('PO_NUMBER')} for the requested asset (project ${V('PROJECT')}) for your processing`},
+  Services: {es:`Adjunto la Orden de Compra ${V('PO_NUMBER')} correspondiente al servicio contratado para el proyecto ${V('PROJECT')} para su gestión`,
+             en:`Please find attached Purchase Order ${V('PO_NUMBER')} for the contracted service (project ${V('PROJECT')}) for your processing`},
+  'Comex Services': {es:`Adjunto la Orden de Compra ${V('PO_NUMBER')} correspondiente al servicio de comercio exterior del proyecto ${V('PROJECT')} para su gestión`,
+             en:`Please find attached Purchase Order ${V('PO_NUMBER')} for the foreign trade service (project ${V('PROJECT')}) for your processing`},
+};
+TYPES.forEach(t => {
+  S.cfg[t] = {
+    es:{subject:`APROBACIÓN COTIZACIÓN C.I ES METALS//REQ.${V('REQ_NUMBER')}//OC ${V('PO_NUMBER')}`, body:BODY_ES(INTRO[t].es)},
+    en:{subject:`QUOTATION APPROVAL C.I ES METALS//REQ.${V('REQ_NUMBER')}//PO ${V('PO_NUMBER')}`, body:BODY_EN(INTRO[t].en)},
+    // DECISIÓN D3: secciones condicionales por tipo de compra. Cada una tiene nombre, las Delivery Location en las que
+    // aplica (una o varias), si está activa y su texto en cada idioma. Se agregan al final del cuerpo, en orden.
+    conds:[{name:'Ingreso de transportadores', locations:['Es-Metals 1'], enabled:true, es:COND_ES, en:COND_EN}],
+  };
+});
+
+const VARS = [
+  ['PO_NUMBER','Número de la OC'],['REQ_NUMBER','Número de requisición (Purchase ID)'],['SUPPLIER_NAME','Nombre del proveedor'],
+  ['SUPPLIER_CONTACT','Contacto(s) en "To"'],['PROJECT','Proyecto de la compra'],['PURCHASE_TYPE','Tipo de compra'],
+  ['DATE','Fecha de envío'],['CLOSING_DATE','Fecha límite (Monthly Closing Date)'],['BUYER','Comprador'],
+];
+const RULE_FIELDS = {delivery:'Delivery Location'};
+
+/* =========================================================================
+   LÓGICA DE NEGOCIO
+   ========================================================================= */
+const sup = id => S.suppliers.find(s => s.id === id);
+const req = id => S.reqs.find(r => r.id === id);
+const reqSuppliers = r => [...new Set(r.items.map(i => i.sup))];
+const supTotal = (r, sid) => r.items.filter(i => i.sup === sid).reduce((a,i) => a + i.qty*i.price, 0);
+const reqTotal = r => r.items.reduce((a,i) => a + i.qty*i.price, 0);
+const MONTHS_EN = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTHS_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const DAYS_ES = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+const DAYS_EN = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const dim = (y,m) => new Date(y, m+1, 0).getDate();
+
+// DECISIÓN D2: fecha límite = día de cierre del mes en curso; si ya pasó, el del mes siguiente.
+function closingDeadline(from = new Date()){
+  let y = from.getFullYear(), m = from.getMonth();
+  const at = (y,m) => new Date(y, m, Math.min(S.closing[m], dim(y,m)));
+  let d = at(y,m);
+  const today = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  if (d < today){ m++; if (m > 11){ m = 0; y++; } d = at(y,m); }
+  return d;
+}
+const fmtDate = (d, lang) => lang === 'es'
+  ? `${cap(DAYS_ES[d.getDay()])}, ${d.getDate()} de ${cap(MONTHS_ES[d.getMonth()])} de ${d.getFullYear()}`
+  : `${DAYS_EN[d.getDay()]}, ${MONTHS_EN[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+const nowStr = () => { const d = new Date(); const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+
+// Secciones condicionales que aplican a la compra:
+//   IF sección activa AND Delivery Location de la compra está en sus ubicaciones -> se agrega al correo  ELSE no
+const condSections = r => S.cfg[r.type].conds.filter(c => c.enabled && c.locations.includes(r.delivery));
+const condApplies = r => condSections(r).length > 0;
+function fillVars(html, ctx){
+  return html
+    .replace(/<span class="var"[^>]*>\{\{(\w+)\}\}<\/span>/g, '{{$1}}')
+    .replace(/\{\{(\w+)\}\}/g, (m, k) => ctx[k] != null ? esc(ctx[k]) : m);
+}
+function emailCtx(r, order, item){
+  const s = sup(order.sup);
+  const names = item.to.map(e => contactByEmail(e)?.name).filter(Boolean);
+  return {
+    PO_NUMBER:order.po, REQ_NUMBER:r.id, SUPPLIER_NAME:s.name,
+    SUPPLIER_CONTACT: names.length ? names.join(', ') : s.name,
+    PROJECT:r.project, PURCHASE_TYPE:r.type, BUYER:USERS[r.buyer].name,
+    DATE:fmtDate(new Date(), item.lang), CLOSING_DATE:fmtDate(closingDeadline(), item.lang),
+  };
+}
+function buildEmail(r, order, item){
+  const t = S.cfg[r.type][item.lang], ctx = emailCtx(r, order, item);
+  item.subject = fillVars(t.subject, ctx).replace(/&amp;/g,'&');
+  let body = fillVars(t.body, ctx);
+  // Secciones condicionales (parte gris del PDF): el sistema las agrega solo si aplican a la Delivery Location
+  condSections(r).forEach(c => { body += `<div class="cond-sec">${fillVars(c[item.lang] || '', ctx)}</div>`; });
+  item.body = body;
+  item.edited = false;
+}
+function contactByEmail(email){
+  for (const s of S.suppliers) for (const c of s.contacts) if (c.email.toLowerCase() === email.toLowerCase()) return {...c, sup:s};
+  return null;
+}
+// DECISIÓN D6: Cc por defecto
+function defaultCc(r){
+  const list = [
+    {email:USERS[r.requestedBy].email, reason:'Creador'},
+    {email:USERS[r.buyer].email, reason:'Comprador'},
+  ];
+  if (r.type === 'Material' || r.type === 'Asset') list.push({email:WAREHOUSE, reason:'Material/Activo'});
+  const seen = new Set();
+  return list.filter(x => !seen.has(x.email) && seen.add(x.email));
+}
+/* Órdenes de compra de la requisición.
+   El usuario ingresa el número de OC en cada ítem (flecha de ACTION) y carga los archivos en ORDERS.
+   Las OCs a enviar se arman agrupando los ítems por número de OC; el proveedor es el de la cotización del ítem.
+   DECISIÓN D4: el adjunto de cada OC es el archivo de ORDERS cuyo nombre contiene el número de OC; si ninguno
+   coincide se propone el primero, y el usuario puede cambiarlo en el formulario de envío. */
+function syncOrders(r){
+  const prev = r.orders || [], groups = [];
+  r.items.forEach(it => { const n = it.order?.number; if (!n) return;
+    let g = groups.find(x => x.po === n); if (!g) groups.push(g = {po:n, sup:it.sup, items:0}); g.items++; });
+  r.orders = groups.map(g => {
+    const old = prev.find(o => o.po === g.po) || {};
+    const kept = old.manual && r.files.find(f => f.file === old.file);
+    const f = kept || r.files.find(x => x.file.includes(g.po)) || r.files[0] || {};
+    return {...old, po:g.po, sup:g.sup, nItems:g.items, file:f.file || '', url:f.url, size:f.size, sent:!!r.sent[g.po]};
+  });
+}
+const poTotal = (r, po) => r.items.filter(i => i.order?.number === po).reduce((a,i) => a + i.qty*i.price, 0);
+const orderReady = r => r.items.every(it => it.order?.number) && r.files.length > 0;
+
+function newSendItem(r, oi){
+  const o = r.orders[oi], s = sup(o.sup);
+  const item = {oi, lang:s.lang, langAuto:true,
+    to: s.contacts.map(c => c.email),   // DECISIÓN D5
+    cc: defaultCc(r)};
+  if (!item.to.length && s.contacts[0]) item.to = [s.contacts[0].email];
+  buildEmail(r, o, item);
+  return item;
+}
+
+/* =========================================================================
+   RENDER
+   ========================================================================= */
+const $ = sel => document.querySelector(sel);
+const STEPS = [
+  ['suppliers','Proveedores y contactos'],['emailcfg','Configuración del correo'],['closing','Monthly Closing Date'],
+  ['purchase','Purchase Order'],['upload','Cargar OC (ORDERS +)'],['transit','IN TRANSIT'],
+  ['select','Seleccionar OC'],['form','Formulario de correo'],['review','Revisar y enviar'],['done','Confirmación'],
+];
+const HINTS = {
+  suppliers:'Un proveedor puede tener uno o varios contactos. Haga clic en el nombre de un contacto para ver su información. Los contactos del proveedor se proponen automáticamente como destinatarios (To) del correo de la OC.',
+  emailcfg:'Purchasing › Settings › EMAIL BODY: asunto y cuerpo por <b>tipo de compra</b> e <b>idioma</b>. Las variables {{…}} se llenan con datos de la OC. La sección gris es condicional (solo Es-Metals 1).',
+  closing:'Fecha de corte mensual del área de Compras. Alimenta la "Fecha Límite de Recepción" ({{CLOSING_DATE}}) que aparece en el correo.',
+  purchase:'Abra una compra. Su <b>Type</b>, <b>Delivery Location</b>, <b>Buyer</b> y <b>Requested by</b> determinan el contenido del correo.',
+  upload:'<b>Paso 1:</b> haga clic en el <b>+</b> de <b>ORDERS</b> para adjuntar la(s) OC desde la carpeta del PC.',
+  transit:'<b>Paso 2:</b> haga clic en <b>IN TRANSIT</b> para iniciar el envío de la OC al proveedor.',
+  select:'<b>Paso 3:</b> seleccione la(s) OC a enviar. Si solo hay una, queda seleccionada automáticamente.',
+  form:'Revise el correo generado: <b>To</b> (contactos del proveedor), <b>Cc</b> (reglas automáticas), <b>Subject</b>, <b>Message</b> y la OC adjunta. Puede cambiar el destino para ver la regla Es-Metals 1.',
+  review:'Confirme el resumen antes del envío (simulado, no se envía ningún correo real).',
+  done:'La OC quedó enviada (simulado), registrada en el historial y la compra pasó a <b>In Transit</b>.',
+};
+function currentStep(){
+  const top = S.modals[S.modals.length-1];
+  const types = S.modals.map(m => m.type);
+  if (types.includes('success')) return 'done';
+  if (types.includes('review') || types.includes('sending')) return 'review';
+  if (types.includes('send')) return 'form';
+  if (types.includes('select')) return 'select';
+  if (types.includes('picker')) return 'upload';
+  if (S.view === 'suppliers') return 'suppliers';
+  if (S.view === 'settings') return S.setTab === 'email' ? 'emailcfg' : 'closing';
+  if (S.view === 'purchases') return 'purchase';
+  if (S.view === 'purchase'){
+    const r = req(S.reqId);
+    if (r.orders.some(o => !o.sent)) return 'transit';
+    return r.orders.length && r.status === 'In Transit' ? 'done' : 'upload';
+  }
+  return 'suppliers';
+}
+// La barra de recorrido se retiró; solo se mantienen las marcas "Paso 1 / Paso 2" dentro de la compra.
+function renderGuide(){
+  $('#app').classList.toggle('guide-on', S.guide);
+  $('#app').classList.toggle('hide-guide', !S.guide);
+}
+function renderRail(){
+  const b = (v, icon, tip, badge='') => `<button class="${(S.view===v || (v==='purchases'&&S.view==='purchase'))?'on':''}" data-a="nav" data-v="${v}">${ic(icon)}${badge}<span class="tip">${tip}</span></button>`;
+  const pending = S.reqs.filter(r => r.status === 'Purchasing').length;
+  $("#rail").innerHTML = `
+    ${b('suppliers','people','Suppliers')}
+    ${b('purchases','receipt','Purchases', pending?`<span class="badge">${pending}</span>`:'')}
+    ${b('settings','gear','Purchasing › Settings')}
+    <div class="grow"></div>
+    <button title="Logout">${ic('logout')}</button>`;
+}
+function render(){
+  renderRail(); renderGuide();
+  if (S.view === 'settings' && S.setTab === 'email') stashEditors();
+  const v ={suppliers:vSuppliers, settings:vSettings, purchases:vPurchases, purchase:vPurchase}[S.view];
+  $('#content').innerHTML = v();
+  if (S.view === 'settings' && S.setTab === 'email') initEditors();
+  renderModals();
+}
+
+/* ---------- Suppliers (pág. 2) ---------- */
+function vSuppliers(){
+  const q = S.supQ.toLowerCase();
+  const list = S.suppliers.filter(s => (!q || s.name.toLowerCase().includes(q) || s.contacts.some(c => c.name.toLowerCase().includes(q))) && (!S.sapOnly || s.sap));
+  const s = sup(S.selSup) || S.suppliers[0];
+  return `<div class="card">
+    <div class="tabs"><button class="tab on">Suppliers</button><button class="tab" data-a="soon" data-t="Evaluations">Evaluations</button></div>
+    <div class="split">
+      <div class="left">
+        <div class="searchrow"><div class="pill-input">${ic('search')}<input placeholder="Search" value="${esc(S.supQ)}" data-i="supQ"></div>
+          <button class="fab" title="New supplier" data-a="addSupplier">${ic('add')}</button></div>
+        <div class="filterrow"><label><span class="toggle"><input type="checkbox" data-c="sapOnly" ${S.sapOnly?'checked':''}><span></span></span>SAP Status</label>
+          <button class="btn sm" data-a="soon" data-t="INFORM">${ic('doc','style="width:14px;height:14px"')} Inform</button></div>
+        <div class="suplist">${list.map(x => `<div class="sup ${x.id===s.id?'on':''}" data-a="selSup" data-id="${x.id}">
+            <div class="bico">${ic('business')}</div>
+            <div style="min-width:0"><div class="nm">${esc(x.name)}</div><div class="ct">${ic('place')}${esc(x.city)}</div></div></div>`).join('') || '<div class="muted" style="padding:16px">Sin resultados</div>'}</div>
+      </div>
+      <div class="detail">
+        <div class="tabs" style="background:transparent;border-bottom:1px solid var(--line)"><button class="tab on" style="background:#fff;border-bottom:2px solid var(--primary)">General information</button></div>
+        <div class="dhead"><span class="ico">${ic('business','style="width:28px;height:28px"')}</span><h2>${esc(s.name)}</h2><div style="flex:1"></div>
+          <label class="toggle" title="Active"><input type="checkbox" ${s.active?'checked':''} data-c="supActive"><span></span></label>
+          <button class="iconbtn">${ic('more')}</button></div>
+        <div class="infogrid">
+          <div class="k">Contacts</div>
+          <div class="cchips">${s.contacts.map((c,i) => `<button class="cchip" title="${esc(c.email)}" data-a="viewContact" data-i="${i}"><span class="avatar">${initials(c.name)}</span>${esc(c.name)}</button>`).join('')}
+            <button class="fab" style="width:26px;height:26px" title="Add contact" data-a="addContact">${ic('add')}</button></div>
+          <div class="k">City</div><div>${esc(s.city)}</div>
+          <div class="k">Currency</div><div>${esc(s.currency)}</div>
+          <div class="k">Language</div><div><span class="flag ${s.lang==='es'?'co':'us'}" title="${s.lang==='es'?'Spanish':'English'}"></span></div>
+          <div class="k">SAP Status</div><div>${s.sap?'On SAP':'Not on SAP'}</div>
+        </div>
+        <div class="evals"><h3>Evaluations</h3><div class="tablewrap" style="background:#fff;border-radius:4px"><table class="t"><thead><tr><th>Date</th><th>Type of Evaluation</th><th>Purchasing Evaluator</th><th>Purchasing Evaluation</th><th>Warehouse Evaluator</th><th>Warehouse Evaluation</th><th>SST Evaluator</th><th>SST Evaluation</th></tr></thead>
+          <tbody><tr><td colspan="8" class="muted small" style="text-align:center">No data available</td></tr></tbody></table></div></div>
+      </div>
+    </div></div>`;
+}
+
+/* ---------- Settings (pág. 3 y 4) ---------- */
+function vSettings(){
+  return `<div class="settings">
+    <div class="card setnav"><div class="grp"><h4>Purchasing</h4><div class="it">${ic('gear')} Settings</div></div></div>
+    <div class="card">
+      <div class="tabs"><button class="tab ${S.setTab==='email'?'on':''}" data-a="setTab" data-t="email">Email body</button>
+        <button class="tab ${S.setTab==='closing'?'on':''}" data-a="setTab" data-t="closing">Monthly closing date</button></div>
+      ${S.setTab === 'email' ? vEmailCfg() : vClosing()}
+    </div></div>`;
+}
+function vEmailCfg(){
+  const c = S.cfg[S.cfgType];
+  if (S.condDraft && (S.condDraft.type !== S.cfgType || S.condDraft.lang !== S.cfgLang)) { S.condEdit = null; S.condDraft = null; }
+  return `<div class="typerow">${TYPES.map(x => `<label><input type="radio" name="ptype" value="${x}" ${x===S.cfgType?'checked':''} data-c="cfgType">${x}</label>`).join('')}</div>
+    <div class="cfghead"><h3>PURCHASE · ${esc(S.cfgType.toUpperCase())}</h3><button class="btn sm" id="cfgSave" data-a="cfgSave" ${S.cfgDirty?'':'disabled'}>Save</button></div>
+    <div class="langtabs"><button class="${S.cfgLang==='en'?'on':''}" data-a="cfgLang" data-l="en"><span class="flag en"></span>English</button>
+      <button class="${S.cfgLang==='es'?'on':''}" data-a="cfgLang" data-l="es"><span class="flag es"></span>Spanish</button></div>
+    <div class="cfgbody">
+      <div style="min-width:0">
+        <div class="subjrow"><label>Subject</label><div class="inp" id="ed-subj" contenteditable="true" data-ed="1"></div></div>
+        <div class="toolbar">
+          <select data-c="fmtBlock"><option value="p">Normal</option><option value="h3">Heading</option></select><span class="sep"></span>
+          <button data-a="fmt" data-cmd="bold"><b>B</b></button><button data-a="fmt" data-cmd="italic"><i>I</i></button>
+          <button data-a="fmt" data-cmd="underline"><u>U</u></button><button data-a="fmt" data-cmd="strikeThrough"><s>S</s></button><span class="sep"></span>
+          <button data-a="fmt" data-cmd="justifyLeft" title="Left">≡</button><button data-a="fmt" data-cmd="justifyCenter" title="Center">☰</button><span class="sep"></span>
+          <button data-a="fmt" data-cmd="insertOrderedList" title="Numbered list">1.</button><button data-a="fmt" data-cmd="insertUnorderedList" title="Bullets">•</button>
+          <button data-a="fmt" data-cmd="outdent" title="Outdent">⇤</button><button data-a="fmt" data-cmd="indent" title="Indent">⇥</button><span class="sep"></span>
+          <button data-a="fmt" data-cmd="removeFormat" title="Clear format">T̸</button>
+        </div>
+        <div class="editor" id="ed-body" contenteditable="true" data-ed="1"></div>
+        <div class="ctitle">Condicional compartido</div>
+        <table class="ctab"><thead><tr><th>Condicional</th><th style="width:210px">Ubicaciones</th><th style="width:120px">Estado</th><th style="width:84px"></th></tr></thead>
+        <tbody>${c.conds.map((s,k) => S.condEdit === k ? condEditRow(s,k) : `<tr class="${s.enabled?'':'off'}">
+          <td><div class="cprev">${esc(plain(s[S.cfgLang]) || '(sin texto)')}</div></td>
+          <td><span class="locsum">${esc(locSummary(s.locations))}</span></td>
+          <td><label class="cstate"><span class="toggle"><input type="checkbox" data-c="condEnabled" data-k="${k}" ${s.enabled?'checked':''}><span></span></span><span class="lbl">${s.enabled?'Activo':'Inactivo'}</span></label></td>
+          <td class="cact"><button class="iconbtn" title="Editar" data-a="editCond" data-k="${k}">${ic('edit')}</button><button class="iconbtn" title="Eliminar" data-a="delCond" data-k="${k}">${ic('del')}</button></td></tr>`).join('')
+          || `<tr><td colspan="4" class="muted small">No hay condicionales para ${esc(S.cfgType)}.</td></tr>`}</tbody></table>
+      </div>
+      <div class="varpanel"><h4>Variables dinámicas</h4><div class="small muted">Clic para insertar donde está el cursor. Se reemplazan automáticamente con los datos de la Purchase Order al generar el correo.</div>
+        <div class="vlist">${VARS.map(([k,d]) => `<button data-a="insVar" data-v="${k}"><span class="var">{{${k}}}</span><small>${d}</small></button>`).join('')}</div></div>
+    </div>`;
+}
+// Resumen compacto de ubicaciones: "A, B +3" o "N ubicaciones seleccionadas"
+const plain = html => { const d = document.createElement('div'); d.innerHTML = html || ''; return d.textContent.replace(/\s+/g,' ').trim(); };
+function locSummary(locs){
+  if (!locs.length) return 'Sin ubicaciones';
+  if (locs.length >= 5) return `${locs.length} ubicaciones seleccionadas`;
+  return locs.length <= 2 ? locs.join(', ') : `${locs.slice(0,2).join(', ')} +${locs.length-2}`;
+}
+// Fila del condicional en edición (se expande en la misma tabla). Las ubicaciones son las Delivery Location del sistema.
+function condEditRow(s, k){
+  const d = S.condDraft;
+  return `<tr class="cedit"><td colspan="4"><div class="cedit-grid">
+    <label class="ce-l">Texto</label><div class="editor ce-text" id="ed-cond-${k}" contenteditable="true" data-ed="1" data-ph="Texto del condicional…"></div>
+    <label class="ce-l">Ubicaciones</label>
+    <div class="locdd"><button class="locfield" data-a="locToggle"><span id="locsum">${esc(locSummary(d.locations))}</span>${ic('down')}</button>
+      <div class="loclist">${LOCATIONS.map(l => `<label class="locopt"><input type="checkbox" data-c="condLoc" value="${esc(l)}" ${d.locations.includes(l)?'checked':''}>${esc(l)}</label>`).join('')}</div></div>
+    <label class="ce-l">Estado</label>
+    <label class="cstate"><span class="toggle"><input type="checkbox" data-c="condDraftEnabled" ${d.enabled?'checked':''}><span></span></span><span class="lbl">${d.enabled?'Activo':'Inactivo'}</span></label>
+  </div>
+  <div class="cedit-actions"><button class="btn grey sm" data-a="cancelCond">Cancel</button><button class="btn sm" data-a="doneCond" data-k="${k}">Save</button></div></td></tr>`;
+}
+const chipify = html => html.replace(/<span class="var"[^>]*>(\{\{\w+\}\})<\/span>/g,'$1').replace(/\{\{(\w+)\}\}/g, '<span class="var" contenteditable="false">{{$1}}</span>');
+function initEditors(){
+  const t = S.cfg[S.cfgType][S.cfgLang];
+  $('#ed-subj').innerHTML = chipify(esc(t.subject).replace(/&#39;/g,"'"));
+  $('#ed-body').innerHTML = chipify(t.body);
+  if (S.condEdit != null) { const ed = $('#ed-cond-'+S.condEdit); if (ed) ed.innerHTML = chipify(S.condDraft.text); }
+  // Conserva lo que se estaba escribiendo en asunto/cuerpo si aún no se ha guardado
+  if (S.cfgDirty && S.edStash) { $('#ed-subj').innerHTML = S.edStash.subj; $('#ed-body').innerHTML = S.edStash.body; }
+  S.edStash = null;
+}
+const stashEditors = () => { if ($('#ed-body')) S.edStash = {subj:$('#ed-subj').innerHTML, body:$('#ed-body').innerHTML}; };
+// Pasa lo escrito en los editores a la plantilla del tipo/idioma actual
+function saveEditors(){
+  const c = S.cfg[S.cfgType], t = c[S.cfgLang];
+  t.subject = $('#ed-subj').textContent.trim();
+  t.body = $('#ed-body').innerHTML;
+}
+function vClosing(){
+  const d = S.closingDraft || S.closing, now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  return `<div class="closing-wrap">
+    <div>
+      <table class="ct"><thead><tr><th>Month</th><th>Closing Date</th></tr></thead>
+      <tbody>${MONTHS_EN.map((mn,i) => { const v = d[i], last = dim(y,i), p = n => String(n).padStart(2,'0');
+        const day = v >= 1 ? Math.min(v, last) : null;
+        // Calendario limitado al mes correspondiente del año actual
+        return `<tr class="${i===m?'cur':''}"><td>${mn}${i===m?' <span class="small muted">(actual)</span>':''}</td>
+          <td><input type="date" class="cdate ${day?'':'bad'}" data-i="closing" data-m="${i}" min="${y}-${p(i+1)}-01" max="${y}-${p(i+1)}-${p(last)}" value="${day ? `${y}-${p(i+1)}-${p(day)}` : ''}"></td></tr>`; }).join('')}</tbody></table>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:12px">
+        <button class="btn grey sm" data-a="closingCancel" ${S.closingDraft?'':'disabled'}>Cancel</button>
+        <button class="btn sm" data-a="closingSave" ${S.closingDraft?'':'disabled'}>Save</button></div>
+    </div>
+  </div>`;
+}
+
+/* ---------- Purchases ---------- */
+// Estructura de la pantalla de compras de la aplicación: pestañas por estado + tabla de requisiciones
+const PUR_TABS = ['Requests','Pricing','Pre-Approval','Approval','Purchasing','In Transit','Received','Closed','Canceled','Pending','Assign','Status','Statistics','Indicators'];
+const typeLabel = t => ({Material:'material', Asset:'asset', Services:'service', 'Comex Services':'comex services'}[t] || t.toLowerCase());
+const num = n => Math.round(n).toLocaleString('es-CO');
+// La compra se abre en una pestaña nueva (junto a REQUESTS), como en la aplicación
+// Solo se muestra la pestaña REQUESTS; la compra se abre en la misma vista (se vuelve con la X o con REQUESTS)
+function purTabsBar(active){
+  return `<div class="purtabs"><button class="${active==='Requests'?'on':''}" data-a="purTab" data-t="Requests">Requests</button></div>`;
+}
+function vPurchases(){
+  const tab = S.purTab || 'Requests';
+  const rows = S.reqs.filter(r => tab === 'Requests' || r.status === tab);
+  return `<div class="pur">
+    ${purTabsBar(tab)}
+    <div class="purbox">
+      <div class="purbar"><div class="purseg"><button class="on">All purchases</button><button data-a="soon" data-t="PROJECT MANAGER">Project manager</button></div>
+        <button class="iconbtn" style="color:var(--primary)" data-a="soon" data-t="Calendar">${ic('calendar','style="width:26px;height:26px"')}</button>
+        <div style="flex:1"></div>
+        <button class="btn lg" data-a="soon" data-t="INFORM">${ic('doc')} Inform</button><button class="btn lg" data-a="soon" data-t="NEW">${ic('add')} New</button></div>
+      <div class="tablewrap"><table class="t pt"><thead><tr><th>ID</th><th>TYPE</th><th>PROJECT</th><th>ITEMS</th><th class="c">TOTAL<br>PRICE</th><th>USERS</th><th>REQ DATE</th><th>DUE DATE</th><th>STATUS</th><th>NOTES</th><th class="c">ACTIONS</th></tr></thead>
+      <tbody>${rows.map(r => `<tr class="click" data-a="openReq" data-id="${r.id}">
+        <td class="c">${r.id}</td><td class="c">${esc(typeLabel(r.type))}</td><td class="c">${esc(r.project)}</td>
+        <td style="text-transform:uppercase">${r.items.map(i => `${esc(i.item)} (${i.qty})`).join('<br>')}</td>
+        <td class="c">${num(reqTotal(r))}</td>
+        <td><b>${esc(USERS[r.requestedBy].name)}<br>${esc(USERS[r.buyer].name)}</b></td>
+        <td class="c nw">${esc(r.reqDate).replace(' ','<br>')}</td><td class="c nw">${esc(r.due).replace(' ','<br>')}</td>
+        <td class="c"><span class="pill ${pillClass(r.status)}">${esc(r.status)}</span></td>
+        <td class="c">${esc(r.notes||'')}</td>
+        <td class="c"><button class="iconbtn" title="Open" data-a="openReq" data-id="${r.id}">${ic('more','style="transform:rotate(90deg)"')}</button></td></tr>`).join('') || `<tr><td colspan="11" class="c muted">No data available</td></tr>`}</tbody></table></div>
+      <div class="purfoot"><span>Rows per page:</span><span>50 ${ic('down','style="width:18px;height:18px"')}</span><span>1-${rows.length} of ${rows.length}</span><span class="muted">‹ &nbsp; ›</span></div>
+    </div>
+  </div>`;
+}
+const pillClass = s => ({'Purchasing':'p-blue','InProgress':'p-blue','OnHold':'p-green','In Transit':'p-transit'}[s] || 'p-blue');
+const statusChip = s => `<span class="pill sm ${pillClass(s)}">${esc(s)}</span>`;
+
+/* ---------- Purchase detail (pág. 5 + estructura actual de la aplicación) ---------- */
+function vPurchase(){
+  const r = req(S.reqId), sids = reqSuppliers(r);
+  const pending = r.orders.filter(o => !o.sent).length;
+  const f = (icon, label, inner, cls='') => `<div class="f ${cls}">${ic(icon)}<div class="fi"><label>${label}</label>${inner}</div></div>`;
+  const val = v => `<div class="val">${esc(v||'')}</div>`;
+  const sel = (key, opts, val, lbl=x=>x) => `<select data-c="reqField" data-f="${key}">${opts.map(o => `<option value="${esc(o)}" ${o===val?'selected':''}>${esc(lbl(o))}</option>`).join('')}</select>`;
+  const condOn = condApplies(r);
+  S.openItems = S.openItems || {};
+  return `<div class="pur">${purTabsBar(r.id)}
+  <div class="pdet">
+    <div class="po-head"><button class="iconbtn x" data-a="closeTab" data-id="${r.id}" title="Close">${ic('close','style="width:24px;height:24px"')}</button><h2>Purchase ID: ${r.id}</h2></div>
+    <div class="frow r5">
+      ${f('list','Select a Type', sel('type', TYPES, r.type, typeLabel))}
+      ${f('person','Select a Project', sel('project', [r.project], r.project))}
+      ${f('person','Project Manager', val(r.pm))}
+      ${f('barcode','Project SAP Code', val(r.sap))}
+      ${f('doc','Project Offer', val(r.offer))}
+    </div>
+    <div class="frow r5">
+      ${f('calendar','Due Date', val(r.due))}
+      ${f('badge','Buyer', `<select data-c="reqField" data-f="buyer">${Object.entries(USERS).filter(([k,u]) => u.role === 'Buyer').map(([k,u]) => `<option value="${k}" ${k===r.buyer?'selected':''}>${esc(u.name)}</option>`).join('')}</select>`)}
+      ${f('person','Requested by', val(USERS[r.requestedBy].name))}
+      <div class="f">${ic('warehouse')}<div class="fi"><label>Delivery Location</label>${sel('delivery', LOCATIONS, r.delivery)}</div></div>
+      ${f('truck','Is it an import?', sel('imp', ['NO','YES'], r.imp))}
+    </div>
+    <div class="frow r3">${f('notes','Notes', `<textarea rows="1" data-c="reqField" data-f="notes">${esc(r.notes||'')}</textarea>`)}</div>
+    <div class="docgrid">
+      <div class="docs"><span class="lb">ATTACHED:</span>${r.attached.map(a => `<a class="doclink">${ic('attach')}${esc(a)}</a>`).join('')}<button class="fab" data-a="soon" data-t="ATTACHED">${ic('add')}</button></div>
+      <div class="docs"><span class="lb">QUOTES:</span>${r.quotes.map(a => `<a class="doclink">${ic('attach')}${esc(a)}</a>`).join('')}<button class="fab" data-a="soon" data-t="QUOTES">${ic('add')}</button></div>
+      <div class="docs orders-box"><span class="lb">ORDERS:</span>
+        ${r.files.map((f,i) => `<span class="ochip"><a class="doclink" ${f.url?`data-a="openFile" data-i="${i}" title="Open file"`:''}>${ic('attach')}${esc(f.file)}</a>${r.orders.some(o => o.sent && o.file === f.file) ? '' : `<button class="fx" data-a="removeFile" data-i="${i}" title="Remove">${ic('close')}</button>`}</span>`).join('')}
+        <button class="fab" data-a="addOrder" title="Upload purchase order from PC">${ic('add')}</button>
+      </div>
+    </div>
+    <div class="docgrid"><div class="docs"><span class="lb">INVOICES:</span>${(r.invoices||[]).map(a => `<a class="doclink">${ic('attach')}${esc(a)}</a>`).join('')}</div></div>
+    <div class="items">
+      <div class="cap"><span>ITEMS</span></div>
+      <div class="tablewrap"><table class="t it">
+      <thead><tr><th></th><th class="c">INDEX</th><th>CODE</th><th>ITEM</th><th class="c">QTY</th><th class="c">Unit Price</th><th class="c">SubTotal</th><th>NOTES</th><th class="c">ORDER</th><th class="c">IMAGE</th><th class="c">ACTION</th></tr></thead>
+      <tbody>${r.items.map((it,i) => { const key = r.id+'-'+i, open = S.openItems[key] === true, s = sup(it.sup);
+        return `<tr class="irow"><td><button class="iconbtn" data-a="toggleItem" data-k="${key}">${ic('down', `style="width:22px;height:22px;color:#666;transform:rotate(${open?180:0}deg)"`)}</button></td>
+          <td class="c">${i+1}</td><td>${esc(it.code)}</td><td><b>${esc(it.item.toUpperCase())}</b></td><td class="c">${it.qty}</td>
+          <td class="c">${money(it.price)}</td><td class="c">${money(it.qty*it.price)}</td><td>${esc((it.notes||'').toUpperCase())}</td>
+          <td class="c"><b>${esc(it.order?.number || '')}</b></td><td></td>
+          <td class="c nw"><button class="iconbtn" title="Purchase Order" data-a="itemOrder" data-i="${i}">${ic('upload')}</button><button class="iconbtn" title="View" data-a="viewItem" data-i="${i}">${ic('eye')}</button></td></tr>
+          ${open ? `<tr class="qrow"><td colspan="11"><div class="qbox tablewrap"><table class="t">
+            <thead><tr><th class="c">ID</th><th class="c">Supplier</th><th>Quote</th><th>Days</th><th>Quoted Qty</th><th>Unit Price Before Tax</th><th>Tax Value</th><th>Total Unit Price</th><th>Notes</th><th>Bidder General Notes</th><th>Bidder Item Notes</th></tr></thead>
+            <tbody><tr><td class="c nw">${((r.id*2654435761 + i*40503) >>> 0).toString(16).slice(0,8)}</td><td class="c">${esc(s.name)}</td><td></td><td class="c">${it.days||30}</td><td class="c"></td><td></td><td></td><td class="c">${money(it.price)}</td><td>${esc(it.qnotes||'')}</td><td></td><td></td></tr></tbody></table></div></td></tr>` : ''}`; }).join('')}</tbody></table></div>
+      <div class="total">TOTAL (NO TAX) ${money(reqTotal(r))}</div></div>
+    <div class="actions"><button class="btn danger" data-a="soon" data-t="REJECT">Reject</button>
+      <div class="transit-wrap">
+        <button class="btn lg ${r.status!=='In Transit' && !orderReady(r) ? 'off' : ''}" data-a="inTransit" ${r.status==='In Transit' && !pending ? 'disabled' : ''} title="${orderReady(r) ? '' : 'Ingrese el número de OC en cada ítem y cargue el archivo en ORDERS'}">${r.status==='In Transit' ? (pending ? `Send pending POs (${pending})` : 'In Transit ✓') : 'In Transit'}</button></div></div>
+    ${r.log.length ? `<div class="log"><div class="sectionhead" style="margin-left:0"><h3>${ic('mail','style="color:var(--primary)"')} Purchase Order emails sent</h3></div>
+      <div class="card tablewrap"><table class="t"><thead><tr><th>Date</th><th>PO</th><th>Supplier</th><th>To</th><th>Cc</th><th>Subject</th><th>Es-Metals 1 section</th><th>Status</th></tr></thead>
+      <tbody>${r.log.map(l => `<tr><td class="small">${esc(l.at)}</td><td><b>${esc(l.po)}</b></td><td>${esc(sup(l.sup).name)}</td><td class="small">${l.to.map(esc).join('<br>')}</td><td class="small">${l.cc.map(esc).join('<br>')}</td>
+        <td class="small">${esc(l.subject)}</td><td>${l.cond?'<span class="inc yes">Included</span>':'<span class="inc no">Not included</span>'}</td><td><span class="status st-sent">Sent</span></td></tr>`).join('')}</tbody></table></div></div>` : ''}
+  </div></div>`;
+}
+
+/* =========================================================================
+   MODALES
+   ========================================================================= */
+function renderModals(){
+  $('#modals').innerHTML = S.modals.map((m,i) => `<div class="overlay" style="z-index:${100+i}">${MODAL[m.type](m)}</div>`).join('');
+  document.body.style.overflow = S.modals.length ? 'hidden' : '';
+  if (S.focus){ const el = $(S.focus); if (el){ el.focus(); } S.focus = null; }
+}
+const openModal = m => { S.modals.push(m); render(); };
+const closeModal = () => { S.modals.pop(); S.dd = null; render(); };
+const mh = (title, closeAct='closeModal') => `<div class="mh"><button class="close" data-a="${closeAct}" title="Close">${ic('close')}</button><h3>${title}</h3></div>`;
+
+const MODAL = {
+  confirm: m => `<div class="modal">${mh(m.title)}<div class="mb">${m.text}</div>
+    <div class="mf"><button class="btn grey" data-a="closeModal">${m.no||'Cancel'}</button><button class="btn" data-a="confirmYes">${m.yes||'Confirm'}</button></div></div>`,
+
+  supplier: m => `<div class="modal md">${mh('New supplier')}<div class="mb"><div class="frm">
+      <label>Supplier name<input type="text" id="ns-name" placeholder="e.g. Metalmecánica Ficticia S.A.S."></label>
+      <div class="row2"><label>City<input type="text" id="ns-city" placeholder="City"></label>
+        <label>Currency<select id="ns-cur"><option>COP</option><option>USD</option></select></label></div>
+      <label>Language (language of the PO email)<select id="ns-lang"><option value="es">Spanish</option><option value="en">English</option></select></label>
+      <div class="small muted" style="margin-top:4px">Primer contacto (podrá agregar más después)</div>
+      <div class="row2"><label>Contact name<input type="text" id="ns-cn"></label><label>Contact email<input type="email" id="ns-ce" placeholder="name@example.com"></label></div>
+      <div class="err" id="ns-err"></div></div></div>
+    <div class="mf"><button class="btn grey" data-a="closeModal">Cancel</button><button class="btn" data-a="saveSupplier">Save</button></div></div>`,
+
+  // Ventana "Contact Information" de la aplicación: se abre al hacer clic en el nombre del contacto
+  contact: m => { const s = sup(S.selSup), c = m.i != null ? s.contacts[m.i] : ct('','','','+57','','','','');
+    const ro = m.edit ? '' : 'readonly tabindex="-1"';
+    const fld = (icon, label, key, req=false) => `<div class="ci-f">${ic(icon)}<label><span>${label}${req?' *':''}</span><input id="nc-${key}" value="${esc(c[key])}" ${ro}></label></div>`;
+    const phone = (ck, pk, ph) => { const code = c[ck] || '+57', fl = PHONE_CODES.find(p => p[0] === code) || PHONE_CODES[0];
+      return `<div class="ci-f cphone"><span class="flag ${fl[1]}"></span><select id="nc-${ck}" data-c="phoneCode" ${m.edit?'':'disabled'}>${PHONE_CODES.map(p => `<option value="${p[0]}" ${p[0]===code?'selected':''}>${p[0]} ${p[2]}</option>`).join('')}</select>
+        <label><span>&nbsp;</span><input id="nc-${pk}" value="${esc(m.edit ? c[pk] : (c[pk] ? code + ' ' + c[pk] : ''))}" placeholder="${ph}" ${ro}></label></div>`; };
+    return `<div class="modal cinfo ${m.edit?'editing':''}">
+      <div class="ci-head"><button class="close" data-a="closeModal" title="Close">${ic('close')}</button><h3>${m.i == null ? 'New Contact' : 'Contact Information'}</h3>
+        ${m.i != null && !m.edit ? `<button class="iconbtn ci-act" title="Edit" data-a="editContact">${ic('edit')}</button><button class="iconbtn ci-act" title="Delete" data-a="delContact" data-i="${m.i}">${ic('del')}</button>` : ''}</div>
+      <div class="mb"><div class="ci-avatar">${ic('account')}</div>
+        <div class="ci-grid">
+          ${fld('badge','Name','name',true)}${fld('mail','Email','email',true)}
+          ${phone('code','phone','Phone 1')}${phone('code2','phone2','Phone 2')}
+          ${fld('globe','Country','country')}${fld('place','State','state')}
+          ${fld('business','City','city')}${fld('gear','Role','role')}
+          <div class="ci-f full">${ic('note')}<label><span>Note</span><input id="nc-note" value="${esc(c.note)}" ${ro}></label></div>
+        </div>
+        <div class="small" style="margin-top:6px">* indicates required field</div>
+        <div class="err" id="nc-err"></div></div>
+      ${m.edit ? `<div class="mf"><button class="btn grey" data-a="${m.i==null?'closeModal':'cancelEditContact'}">Cancel</button><button class="btn" data-a="saveContact">Save</button></div>` : ''}</div>`; },
+
+
+  // Flecha de ACTION en cada ítem: registrar el número de OC del ítem (como en la aplicación)
+  itemOrder: m => { const it = req(S.reqId).items[m.i], o = it.order || {};
+    return `<div class="modal pom">${mh('Purchase Order')}<div class="mb">
+      <div class="small muted" style="margin:-6px 0 16px">Ítem ${m.i+1}: ${esc(it.item.toUpperCase())} · ${esc(sup(it.sup).name)}</div>
+      <div class="pom-f">${ic('barcode')}<label><span>Order Number *</span><input id="po-num" value="${esc(o.number||'')}" placeholder="Order Number" data-i="poNum"></label></div>
+      <div class="pom-f">${ic('calendar')}<label><span>Due Date *</span><input id="po-due" type="date" data-i="poNum" required value="${esc(o.due||'')}"></label></div>
+      <div class="pom-f">${ic('notes')}<label><span>Notes</span><textarea id="po-notes">${esc(o.notes||'')}</textarea></label></div></div>
+      <div class="mf"><button class="btn" id="po-save" data-a="saveItemOrder" ${o.number && o.due ? '' : 'disabled'}>Save</button></div></div>`; },
+
+  // Paso 3 (pág. 6): desplegable simple con número de OC y proveedor (una OC por envío)
+  select: m => { const r = req(S.reqId); const avail = r.orders.map((o,i) => ({o,i})).filter(x => !x.o.sent);
+    const n = m.sel.length;
+    return `<div class="modal">${mh('Select Purchase Order to Send')}<div class="mb">
+      <select class="posel" data-c="selPO">${avail.length > 1 ? `<option value="" ${n?'':'selected'} disabled>Select…</option>` : ''}
+        ${avail.map(({o,i}) => `<option value="${i}" ${m.sel.includes(i)?'selected':''}>OC ${esc(o.po)} — ${esc(sup(o.sup).name)}</option>`).join('')}</select>
+      </div>
+      <div class="mf"><button class="btn grey" data-a="selCancel">Cancel</button><button class="btn" data-a="selContinue" ${n?'':'disabled'}>Continue</button></div></div>`; },
+
+  // Pág. 7 del PDF: "Send Purchase Order" — To, Cc, Subject, Message, Purchase Order y SEND
+  send: m => { const r = req(S.reqId), item = m.items[m.active], o = r.orders[item.oi];
+    return `<div class="modal sendpo">${mh('Send Purchase Order', 'sendCancel')}
+      <div class="mb">
+        <div class="sp-f"><label>To:</label>${chipField('to', item, r, o)}</div>
+        <div class="sp-f cc"><label>Cc:</label>${chipField('cc', item, r, o)}</div>
+        <div class="sp-f"><label>Subject:</label><input class="subj" value="${esc(item.subject)}" data-i="subject"></div>
+        <div class="sp-msg"><div class="msg" contenteditable="true" data-i="msg" data-ph="Message">${item.body}</div></div>
+        <div class="sp-att"><span class="lb">Purchase Order:</span><a class="doclink" data-a="openOrder" data-i="${item.oi}" title="Open file">${ic('attach')}${esc(o.file)}</a>
+          ${r.files.length > 1 ? `<select class="sp-file" data-c="poFile" data-i="${item.oi}" title="Archivo de ORDERS">${r.files.map(f => `<option ${f.file===o.file?'selected':''}>${esc(f.file)}</option>`).join('')}</select>` : ''}</div>
+      </div>
+      <div class="sp-foot"><button class="btn" data-a="sendReview">Send</button></div></div>`; },
+
+  review: m => { const r = req(S.reqId), send = S.modals.find(x => x.type === 'send');
+    return `<div class="modal md">${mh('Review before sending')}<div class="mb">
+      <div class="small muted" style="margin-bottom:10px">Purchase ID <b>${r.id}</b> · ${esc(r.type)} · Delivery Location: <b>${esc(r.delivery)}</b></div>
+      ${send.items.map(it => { const o = r.orders[it.oi];
+        return `<div class="review-item"><h4><span>${ic('mail','style="width:16px;height:16px;color:var(--primary)"')} ${esc(o.po)} → ${esc(sup(o.sup).name)}</span></h4>
+          <div class="rgrid"><div class="k">To</div><div>${it.to.map(esc).join(', ')}</div><div class="k">Cc</div><div>${it.cc.map(c => esc(c.email)).join(', ') || '—'}</div>
+          <div class="k">Subject</div><div><b>${esc(it.subject)}</b></div><div class="k">Language</div><div>${it.lang==='es'?'Spanish':'English'}</div>
+          <div class="k">Attachment</div><div>${esc(o.file)}</div></div></div>`; }).join('')}
+      <div class="callout warn">${ic('info')}<span>Al confirmar, la compra cambiará a estado <b>In Transit</b>. (Simulación: no se envía ningún correo real.)</span></div></div>
+      <div class="mf"><button class="btn grey" data-a="closeModal">Back to edit</button><button class="btn ok" data-a="sendConfirm">${ic('send','style="width:16px;height:16px"')} Confirm &amp; send</button></div></div>`; },
+
+  sending: () => `<div class="modal" style="width:min(320px,100%)"><div class="mb" style="text-align:center"><div class="spinner"></div><div>Sending purchase order…</div><div class="small muted">Simulación</div></div></div>`,
+
+  success: m => { const r = req(S.reqId);
+    return `<div class="modal md"><div class="mb" style="text-align:center;padding-top:22px">
+      <div class="success-ico">${ic('check')}</div><h3 style="margin:0 0 4px;font-size:19px">Purchase Order${m.sent.length>1?'s':''} sent successfully</h3>
+      <div class="flowchg">${statusChip(m.prev)} ${ic('arrow','style="color:#999"')} ${statusChip('In Transit')}</div>
+      <div class="small muted" style="margin-bottom:14px">Purchase ID ${r.id} · ${nowStr()}</div>
+      <div style="text-align:left">${m.sent.map(x => `<div class="sent-line"><p>Purchase Order <b>${esc(x.po)}</b> was successfully sent to <b>${esc(sup(x.sup).name.replace(/\.$/,''))}</b>.</p>
+        <div class="small"><b>To:</b> ${x.to.map(e => `<span class="chip" style="background:#e8f5e9">${esc(contactByEmail(e)?.name ? contactByEmail(e).name+' · ':'' )}${esc(e)}</span>`).join(' ')}</div>
+        <div class="small" style="margin-top:4px"><b>Cc:</b> ${x.cc.map(esc).join(', ')}</div></div>`).join('')}</div></div>
+      <div class="mf"><button class="btn ghost" data-a="successList">Back to purchases</button><button class="btn" data-a="successClose">View purchase</button></div></div>`; },
+};
+
+// Campo de destinatarios (chips + desplegable + escritura libre)
+function chipField(kind, item, r, o){
+  const vals = kind === 'to' ? item.to : item.cc.map(c => c.email);
+  const chips = vals.map((e,j) => { const c = contactByEmail(e) || Object.values(USERS).find(u => u.email === e); const reason = kind==='cc' ? item.cc[j].reason : '';
+    return `<span class="ec" title="${esc(c ? c.name + ' — ' + e : e)}${reason ? ' (' + esc(reason) + ')' : ''}"><span>${esc(e)}</span><button class="x" data-a="chipDel" data-k="${kind}" data-j="${j}">${ic('close')}</button></span>`; }).join('');
+  let dd = '';
+  if (S.dd === kind){
+    const sids = reqSuppliers(r);
+    // Solo los contactos del proveedor de esta OC (no se puede dirigir a otros proveedores)
+    const groups = [[`Contactos de ${sup(o.sup).name}`, [o.sup]]];
+    // Personal de ES Metals disponible para copia: todos los usuarios internos + Warehouse
+    const internal = kind === 'cc' ? [...Object.values(USERS), {name:'Warehouse', email:WAREHOUSE, role:'Almacén'}] : [];
+    dd = `<div class="dd">${kind==='cc' ? `<div class="g">Internos ES Metals</div>${internal.map(u => `<div class="o" data-a="ddPick" data-k="cc" data-e="${esc(u.email)}"><input type="checkbox" ${vals.includes(u.email)?'checked':''} tabindex="-1"><b>${esc(u.name)}</b><span class="em">${esc(u.email)}</span><span class="sp">${esc(u.role)}</span></div>`).join('')}` : ''}
+      ${groups.filter(g => g[1].length).map(([g, ids]) => `<div class="g">${esc(g)}</div>${ids.map(id => sup(id).contacts.map(c => `<div class="o" data-a="ddPick" data-k="${kind}" data-e="${esc(c.email)}"><input type="checkbox" ${vals.includes(c.email)?'checked':''} tabindex="-1"><b>${esc(c.name)}</b><span class="em">${esc(c.email)}</span><span class="sp">${esc(c.role||'')}</span></div>`).join('')).join('')}`).join('')}</div>`;
+  }
+  return `<div class="chipfield dd-wrap" data-a="ddOpen" data-k="${kind}">${chips}<input id="in-${kind}" data-kd="${kind}" placeholder="${vals.length?'':'Seleccione o escriba un correo y presione Enter'}"><button class="caret" data-a="ddOpen" data-k="${kind}" tabindex="-1">${ic('down')}</button>${dd}</div>`;
+}
+
+/* =========================================================================
+   EVENTOS
+   ========================================================================= */
+function toast(msg, kind=''){
+  const t = document.createElement('div'); t.className = `toast ${kind}`;
+  t.innerHTML = `${ic(kind==='ok'?'check':'info')}<span>${msg}</span>`;
+  $('#toasts').appendChild(t); setTimeout(() => t.remove(), 4200);
+}
+const topModal = () => S.modals[S.modals.length-1];
+const sendModal = () => S.modals.find(m => m.type === 'send');
+const curItem = () => { const m = sendModal(); return m.items[m.active]; };
+
+function guardCfg(then){
+  if (!S.cfgDirty) return then();
+  openModal({type:'confirm', title:'Unsaved changes', text:'Hay cambios sin guardar en esta plantilla. ¿Desea descartarlos?', yes:'Discard', onYes:() => { S.cfgDirty = false; then(); }});
+}
+function addRecipient(kind, email){
+  const it = curItem(); email = email.trim();
+  if (!isEmail(email)) { toast(`"${esc(email)}" no es un correo válido`, 'warn'); return false; }
+  // No se permite escribir el correo de un contacto de otro proveedor
+  const r = req(S.reqId), o = r.orders[it.oi], owner = contactByEmail(email);
+  if (owner && owner.sup.id !== o.sup) { toast(`${esc(email)} pertenece a ${esc(owner.sup.name)}; solo se puede enviar a contactos de ${esc(sup(o.sup).name)}`, 'warn'); return false; }
+  if (kind === 'to'){ if (!it.to.some(e => e.toLowerCase() === email.toLowerCase())) it.to.push(email); }
+  else if (!it.cc.some(c => c.email.toLowerCase() === email.toLowerCase())) it.cc.push({email, reason:''});
+  return true;
+}
+function refreshGreeting(){
+  // Si el usuario no editó el mensaje, regenerar para actualizar {{SUPPLIER_CONTACT}}
+  const m = sendModal(), it = m.items[m.active], r = req(S.reqId);
+  if (!it.edited) buildEmail(r, r.orders[it.oi], it);
+}
+
+const A = {
+  nav: el => { const go = () => { S.view = el.dataset.v; S.modals = []; render(); window.scrollTo(0,0); };
+    S.view === 'settings' ? guardCfg(go) : go(); },
+  gostep: el => { const k = el.dataset.k; const go = () => {
+      if (k === 'suppliers') S.view = 'suppliers';
+      if (k === 'emailcfg'){ S.view = 'settings'; S.setTab = 'email'; }
+      if (k === 'closing'){ S.view = 'settings'; S.setTab = 'closing'; }
+      if (k === 'purchase') S.view = 'purchases';
+      S.modals = []; render(); };
+    S.view === 'settings' && S.setTab === 'email' ? guardCfg(go) : go(); },
+  toggleGuide: () => { S.guide = !S.guide; render(); },
+  reset: () => location.reload(),
+  soon: el => toast(`"${esc(el.dataset.t)}" existe en la aplicación actual y no forma parte de esta maqueta.`),
+  closeModal: () => closeModal(),
+  confirmYes: () => { const m = S.modals.pop(); m.onYes && m.onYes(); render(); },
+
+  // Suppliers
+  selSup: el => { S.selSup = el.dataset.id; render(); },
+  addSupplier: () => { openModal({type:'supplier'}); S.focus = '#ns-name'; renderModals(); },
+  saveSupplier: () => {
+    const v = id => $(id).value.trim(), name = v('#ns-name'), cn = v('#ns-cn'), ce = v('#ns-ce');
+    if (!name || !v('#ns-city')) return $('#ns-err').textContent = 'Nombre y ciudad son obligatorios.';
+    if (!cn || !isEmail(ce)) return $('#ns-err').textContent = 'Ingrese el nombre y un correo válido del primer contacto.';
+    const id = 's' + Date.now();
+    S.suppliers.push({id, name, city:v('#ns-city'), currency:$('#ns-cur').value, lang:$('#ns-lang').value, sap:false, active:true, contacts:[ct(cn, ce, '', '+57', '', '', '', v('#ns-city'))]});
+    S.selSup = id; S.modals.pop(); render(); toast(`Proveedor <b>${esc(name)}</b> creado`, 'ok');
+  },
+  viewContact: el => openModal({type:'contact', i:+el.dataset.i, edit:false}),
+  addContact: () => { openModal({type:'contact', i:null, edit:true}); S.focus = '#nc-name'; renderModals(); },
+  editContact: () => { topModal().edit = true; S.focus = '#nc-name'; renderModals(); },
+  cancelEditContact: () => { topModal().edit = false; renderModals(); },
+  saveContact: () => {
+    const m = topModal(), s = sup(S.selSup), v = id => $('#nc-' + id).value.trim();
+    const name = v('name'), email = v('email');
+    if (!name) return $('#nc-err').textContent = 'Name is required.';
+    if (!isEmail(email)) return $('#nc-err').textContent = 'Enter a valid email.';
+    if (s.contacts.some((c,i) => i !== m.i && c.email.toLowerCase() === email.toLowerCase())) return $('#nc-err').textContent = 'This email is already registered for this supplier.';
+    const data = {name, email, code:v('code'), phone:v('phone'), code2:v('code2'), phone2:v('phone2'), country:v('country'), state:v('state'), city:v('city'), role:v('role'), note:v('note')};
+    if (m.i == null){ s.contacts.push(data); S.modals.pop(); toast(`Contacto <b>${esc(name)}</b> agregado a ${esc(s.name)}`, 'ok'); }
+    else { Object.assign(s.contacts[m.i], data); m.edit = false; toast('Contacto actualizado', 'ok'); }
+    render();
+  },
+  delContact: el => { const s = sup(S.selSup), i = +el.dataset.i, c = s.contacts[i];
+    openModal({type:'confirm', title:'Delete contact', text:`¿Eliminar a <b>${esc(c.name)}</b> (${esc(c.email)}) de ${esc(s.name)}?`, yes:'Delete',
+      onYes:() => { s.contacts.splice(i, 1); S.modals = S.modals.filter(x => x.type !== 'contact'); toast('Contacto eliminado'); }}); },
+
+  // Settings
+  setTab: el => { const go = () => { S.setTab = el.dataset.t; render(); }; S.setTab === 'email' ? guardCfg(go) : go(); },
+  cfgLang: el => guardCfg(() => { S.cfgLang = el.dataset.l; render(); }),
+  // Condicional compartido: editar (en la misma fila), activar/desactivar y eliminar
+  editCond: el => { const k = +el.dataset.k, s = S.cfg[S.cfgType].conds[k];
+    S.condEdit = k; S.condDraft = {type:S.cfgType, lang:S.cfgLang, text:s[S.cfgLang] || '', locations:[...s.locations], enabled:s.enabled}; render();
+    const ed = $('#ed-cond-'+k); if (ed) ed.focus(); },
+  cancelCond: () => { S.condEdit = null; S.condDraft = null; render(); },
+  doneCond: el => { const s = S.cfg[S.cfgType].conds[+el.dataset.k], d = S.condDraft;
+    s[S.cfgLang] = $('#ed-cond-'+el.dataset.k).innerHTML; s.locations = d.locations; s.enabled = d.enabled;
+    S.condEdit = null; S.condDraft = null; render(); toast('Condicional actualizado', 'ok'); },
+  locToggle: el => el.closest('.locdd').classList.toggle('open'),
+  delCond: el => { const k = +el.dataset.k;
+    openModal({type:'confirm', title:'Eliminar condicional', text:`¿Eliminar este condicional de las plantillas ${esc(S.cfgType)}?`, yes:'Delete',
+      onYes:() => { S.cfg[S.cfgType].conds.splice(k, 1); S.condEdit = null; toast('Condicional eliminado'); }}); },
+  cfgSave: () => {
+    saveEditors();
+    S.cfgDirty = false; render(); toast(`Plantilla <b>${esc(S.cfgType)} · ${S.cfgLang==='es'?'Spanish':'English'}</b> guardada`, 'ok');
+  },
+  fmt: el => { document.execCommand(el.dataset.cmd, false, null); markDirty(); },
+  insVar: el => {
+    const id = S.lastEd || 'ed-body', ed = document.getElementById(id); if (!ed) return;
+    ed.focus();
+    const sel = window.getSelection();
+    if (S.lastRange && ed.contains(S.lastRange.startContainer)) { sel.removeAllRanges(); sel.addRange(S.lastRange); }
+    document.execCommand('insertHTML', false, `<span class="var" contenteditable="false">{{${el.dataset.v}}}</span>&nbsp;`);
+    markDirty();
+  },
+  closingSave: () => {
+    if (S.closingDraft.some(v => !(v>=1 && v<=31))) return toast('Hay fechas inválidas (deben estar entre 1 y 31)', 'warn');
+    S.closing = [...S.closingDraft]; S.closingDraft = null; render(); toast('Monthly Closing Date guardado', 'ok');
+  },
+  closingCancel: () => { S.closingDraft = null; render(); },
+
+  // Purchases
+  purTab: el => { const t = el.dataset.t;
+    if (t === 'Requests' || t === 'Purchasing' || t === 'In Transit') { S.purTab = t; S.view = 'purchases'; render(); }
+    else toast(`La pestaña "${esc(t.toUpperCase())}" existe en la aplicación actual y no forma parte de esta maqueta.`); },
+  openReq: el => { const id = +el.dataset.id; S.openTabs = S.openTabs || [];
+    if (!S.openTabs.includes(id)) S.openTabs.push(id);
+    S.reqId = id; S.view = 'purchase'; render(); window.scrollTo(0,0); },
+  closeTab: (el, e) => { e.stopPropagation(); const id = +el.dataset.id;
+    S.openTabs = (S.openTabs || []).filter(x => x !== id);
+    if (S.view === 'purchase' && S.reqId === id) { S.view = 'purchases'; S.purTab = 'Requests'; }
+    render(); },
+  toggleItem: el => { const k = el.dataset.k; S.openItems[k] = !S.openItems[k]; render(); },
+  // Paso 1: el "+" de ORDERS abre el explorador de archivos real del PC (el archivo no sale del navegador)
+  addOrder: () => { const inp = $('#po-file'); inp.value = ''; inp.click(); },
+  openFile: (el, e) => { e.stopPropagation(); const f = req(S.reqId).files[+el.dataset.i]; if (f.url) window.open(f.url, '_blank'); },
+  openOrder: (el, e) => { e.stopPropagation(); const o = req(S.reqId).orders[+el.dataset.i]; if (o.url) window.open(o.url, '_blank'); else toast(`${esc(o.file)} (archivo de ejemplo)`); },
+  removeFile: el => { const r = req(S.reqId); r.files.splice(+el.dataset.i, 1); syncOrders(r); render(); },
+  // Número de OC por ítem
+  itemOrder: el => { openModal({type:'itemOrder', i:+el.dataset.i}); S.focus = '#po-num'; renderModals(); },
+  saveItemOrder: () => {
+    const m = topModal(), r = req(S.reqId), it = r.items[m.i], number = $('#po-num').value.trim();
+    if (!number || !$('#po-due').value) return toast('Order Number y Due Date son obligatorios', 'warn');
+    if (it.order?.number && r.sent[it.order.number]) { closeModal(); return toast('Esta OC ya fue enviada al proveedor y no se puede cambiar', 'warn'); }
+    it.order = {number, due:$('#po-due').value, notes:$('#po-notes').value.trim()};
+    syncOrders(r); S.modals.pop(); render();
+    const missing = r.items.filter(x => !x.order?.number).length;
+    toast(`OC <b>${esc(number)}</b> registrada en el ítem ${m.i+1}.${missing ? ` Faltan ${missing} ítem(s) por OC.` : ''}`, 'ok');
+  },
+  viewItem: el => { const r = req(S.reqId), it = r.items[+el.dataset.i];
+    if (!it.order?.number) return toast(`El ítem ${+el.dataset.i+1} aún no tiene número de OC`, 'warn');
+    const oi = r.orders.findIndex(o => o.po === it.order.number), o = r.orders[oi];
+    if (o?.url) window.open(o.url, '_blank');
+    else toast(`OC <b>${esc(it.order.number)}</b>${it.order.due ? ' · Due ' + esc(it.order.due) : ''}${o?.file ? ' · ' + esc(o.file) : ' · sin archivo en ORDERS'}`); },
+
+  // Paso 2: IN TRANSIT (requiere OC en todos los ítems y archivo en ORDERS)
+  inTransit: () => {
+    const r = req(S.reqId);
+    if (r.status !== 'In Transit' && !orderReady(r)) {
+      const missing = r.items.filter(x => !x.order?.number).length;
+      return toast(missing ? `Para pasar a IN TRANSIT ingrese el número de OC en cada ítem (flecha en ACTION). Faltan ${missing}.` : 'Para pasar a IN TRANSIT cargue el archivo de la OC en <b>ORDERS (+)</b>.', 'warn');
+    }
+    const avail = r.orders.map((o,i) => ({o,i})).filter(x => !x.o.sent);
+    if (!avail.length) return;
+    const noContacts = avail.filter(x => !sup(x.o.sup).contacts.length);
+    if (noContacts.length) toast(`El proveedor ${esc(sup(noContacts[0].o.sup).name)} no tiene contactos registrados; deberá escribir el correo manualmente.`, 'warn');
+    // Si solo hay una OC, queda seleccionada automáticamente
+    openModal({type:'select', sel: avail.length === 1 ? [avail[0].i] : [], open: avail.length > 1});
+  },
+  selToggle: () => { topModal().open = !topModal().open; renderModals(); },
+  // Solo se puede enviar una OC a la vez: seleccionar una reemplaza la anterior y cierra la lista
+  selPO: el => { const m = topModal(); m.sel = [+el.dataset.i]; m.open = false; renderModals(); },
+  selAll: () => { const m = topModal(), r = req(S.reqId); const all = r.orders.map((o,i) => o.sent ? -1 : i).filter(i => i >= 0);
+    m.sel = m.sel.length === all.length ? [] : all; renderModals(); },
+  selCancel: () => { closeModal(); toast('Cambio de estado cancelado. La compra sigue en <b>Purchasing</b>.'); },
+  selContinue: () => { const r = req(S.reqId), m = S.modals.pop();
+    S.modals.push({type:'send', active:0, items:m.sel.map(i => newSendItem(r, i))}); render(); },
+
+  // Formulario de correo
+  sendTab: el => { sendModal().active = +el.dataset.k; S.dd = null; renderModals(); },
+  // X: salir del formulario sin confirmación (la compra no cambia de estado)
+  sendCancel: () => { S.modals = []; S.dd = null; render(); },
+  ddOpen: (el, e) => { const k = el.dataset.k;
+    if (e.target.tagName === 'INPUT' && S.dd === k) return;
+    S.dd = S.dd === k && el.classList.contains('caret') ? null : k; S.focus = `#in-${k}`; renderModals(); },
+  ddPick: (el, e) => { e.stopPropagation(); const it = curItem(), k = el.dataset.k, em = el.dataset.e;
+    if (k === 'to'){ it.to = it.to.includes(em) ? it.to.filter(x => x !== em) : [...it.to, em]; refreshGreeting(); }
+    else { const ix = it.cc.findIndex(c => c.email === em); ix >= 0 ? it.cc.splice(ix,1) : it.cc.push({email:em, reason:''}); }
+    S.focus = `#in-${k}`; renderModals(); },
+  chipDel: (el, e) => { e.stopPropagation(); const it = curItem(), j = +el.dataset.j;
+    if (el.dataset.k === 'to'){ it.to.splice(j,1); refreshGreeting(); } else it.cc.splice(j,1);
+    renderModals(); },
+  sendLang: el => { const it = curItem(), r = req(S.reqId);
+    const go = () => { it.lang = el.dataset.l; it.langAuto = false; buildEmail(r, r.orders[it.oi], it); renderModals(); };
+    it.edited ? openModal({type:'confirm', title:'Regenerate message?', text:'El mensaje tiene cambios manuales que se perderán al cambiar el idioma.', yes:'Regenerate', onYes:go}) : go(); },
+  sendReview: () => {
+    const m = sendModal(), bad = m.items.findIndex(it => !it.to.length);
+    if (bad >= 0){ m.active = bad; renderModals(); return toast('Cada correo debe tener al menos un destinatario en <b>To</b>', 'warn'); }
+    if (m.items.some(it => !it.subject.trim())) return toast('El asunto es obligatorio', 'warn');
+    S.dd = null; openModal({type:'review'});
+  },
+  sendConfirm: () => {
+    S.modals.pop(); openModal({type:'sending'});
+    setTimeout(() => {
+      const r = req(S.reqId), m = sendModal(), prev = r.status, sent = [];
+      m.items.forEach(it => {
+        const o = r.orders[it.oi], at = nowStr();
+        Object.assign(o, {sent:true, sentAt:at, to:[...it.to], cc:it.cc.map(c => c.email)}); r.sent[o.po] = true;
+        r.log.unshift({at, po:o.po, sup:o.sup, to:[...it.to], cc:it.cc.map(c => c.email), subject:it.subject, cond:condApplies(r)});
+        sent.push({po:o.po, sup:o.sup, to:[...it.to], cc:it.cc.map(c => c.email)});
+      });
+      r.status = 'In Transit';   // DECISIÓN D7
+      S.modals = [{type:'success', sent, prev}]; render();
+      toast(sent.length === 1 ? `Purchase Order ${esc(sent[0].po)} was successfully sent to ${esc(sup(sent[0].sup).name.replace(/\.$/,''))}.` : `${sent.length} Purchase Orders sent.`, 'ok');
+    }, 1100);
+  },
+  successClose: () => { S.modals = []; render(); },
+  successList: () => { S.modals = []; S.view = 'purchases'; render(); },
+};
+
+function markDirty(){ S.cfgDirty = true; const b = $('#cfgSave'); if (b) b.disabled = false; }
+
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-a]');
+  if (!e.target.closest('.locdd')) document.querySelectorAll('.locdd.open').forEach(x => x.classList.remove('open'));
+  if (S.dd &&!e.target.closest('.dd-wrap')) { S.dd = null; if (!el) { renderModals(); return; } }
+  if (!el) return;
+  if (el.tagName === 'BUTTON' || el.dataset.a === 'ddPick') e.preventDefault();
+  A[el.dataset.a]?.(el, e);
+});
+document.addEventListener('mousedown', e => { if (e.target.closest('.toolbar button, .varpanel button')) e.preventDefault(); });
+
+document.addEventListener('input', e => {
+  const t = e.target, k = t.dataset.i;
+  if (t.closest('[data-ed]')) { markDirty(); return; }
+  if (k === 'supQ'){ S.supQ = t.value; const pos = t.selectionStart; render(); const n = $('[data-i="supQ"]'); n.focus(); n.setSelectionRange(pos,pos); }
+  if (k === 'closing'){ S.closingDraft = S.closingDraft || [...S.closing];
+    // Solo se acepta una fecha dentro del mes de esa fila; se guarda el día
+    const [yy, mm, dd] = (t.value || '').split('-').map(Number);
+    S.closingDraft[+t.dataset.m] = (yy && mm - 1 === +t.dataset.m) ? dd : NaN;
+    const v = S.closingDraft[+t.dataset.m]; t.classList.toggle('bad', !(v>=1 && v<=31));
+    document.querySelectorAll('[data-a="closingSave"],[data-a="closingCancel"]').forEach(b => b.disabled = false); }
+  if (k === 'poNum') $('#po-save').disabled = !($('#po-num').value.trim() && $('#po-due').value);
+  if (k === 'subject') curItem().subject = t.value;
+  if (k === 'msg'){ const it = curItem(); it.body = t.innerHTML; it.edited = true; }
+});
+// Archivos de OC elegidos desde el PC
+function addOrderFiles(files){
+  const r = req(S.reqId);
+  [...files].forEach(f => {
+    if (r.files.some(x => x.file === f.name)) return toast(`<b>${esc(f.name)}</b> ya está cargado`, 'warn');
+    const kb = Math.max(1, Math.round(f.size / 1024));
+    r.files.push({file:f.name, size:kb > 1024 ? (kb/1024).toFixed(1)+' MB' : kb+' KB', url:URL.createObjectURL(f)});
+  });
+  syncOrders(r); render();
+  if (files.length) toast(`${files.length} archivo(s) cargado(s) en ORDERS`, 'ok');
+}
+document.addEventListener('change', e => {
+  if (e.target.id === 'po-file') return addOrderFiles(e.target.files);
+  const t = e.target, c = t.dataset.c; if (!c) return;
+  if (c === 'sapOnly'){ S.sapOnly = t.checked; render(); }
+  if (c === 'supActive'){ sup(S.selSup).active = t.checked; toast(`Proveedor ${t.checked?'activado':'desactivado'}`); }
+  if (c === 'phoneCode'){ const f = t.closest('.cphone').querySelector('.flag'); f.className = 'flag ' + PHONE_CODES.find(p => p[0] === t.value)[1]; }
+  if (c === 'cfgType'){ const v = t.value; guardCfg(() => { S.cfgType = v; render(); }); if (S.cfgDirty) t.checked = false; }
+  if (c === 'fmtBlock'){ document.execCommand('formatBlock', false, t.value); markDirty(); }
+  if (c === 'condEnabled'){ S.cfg[S.cfgType].conds[+t.dataset.k].enabled = t.checked;
+    t.closest('tr').classList.toggle('off', !t.checked); t.closest('.cstate').querySelector('.lbl').textContent = t.checked ? 'Activo' : 'Inactivo'; }
+  if (c === 'condDraftEnabled'){ S.condDraft.enabled = t.checked; t.closest('.cstate').querySelector('.lbl').textContent = t.checked ? 'Activo' : 'Inactivo'; }
+  if (c === 'condLoc'){ const d = S.condDraft, l = t.value;
+    d.locations = t.checked ? LOCATIONS.filter(x => x === l || d.locations.includes(x)) : d.locations.filter(x => x !== l);
+    $('#locsum').textContent = locSummary(d.locations); }
+  if (c === 'reqField'){ const r = req(S.reqId); r[t.dataset.f] = t.value; render();
+    if (t.dataset.f === 'type') toast(`Tipo ${esc(t.value)}: se usará la plantilla ${esc(t.value)} y ${t.value==='Material'||t.value==='Asset'?'se copiará a':'no se copiará a'} ${WAREHOUSE}`); }
+  if (c === 'selPO'){ const m = topModal(); m.sel = t.value === '' ? [] : [+t.value]; renderModals(); }
+  if (c === 'poFile'){ const r = req(S.reqId), o = r.orders[+t.dataset.i], f = r.files.find(x => x.file === t.value);
+    Object.assign(o, {file:f.file, url:f.url, size:f.size, manual:true}); renderModals(); }
+});
+document.addEventListener('keydown', e => {
+  const k = e.target.dataset?.kd; if (!k) return;
+  if ((e.key === 'Enter' || e.key === ',' || e.key === ';') && e.target.value.trim()){
+    e.preventDefault(); if (addRecipient(k, e.target.value)) { if (k==='to') refreshGreeting(); S.focus = `#in-${k}`; renderModals(); }
+  } else if (e.key === 'Backspace' && !e.target.value){
+    const it = curItem(); k === 'to' ? it.to.pop() : it.cc.pop(); if (k==='to') refreshGreeting(); S.focus = `#in-${k}`; renderModals();
+  } else if (e.key === 'Escape'){ S.dd = null; renderModals(); }
+});
+// Recordar el último editor y posición del cursor (para insertar variables)
+document.addEventListener('focusin', e => { const ed = e.target.closest?.('[data-ed]'); if (ed) S.lastEd = ed.id; });
+document.addEventListener('selectionchange', () => {
+  const sel = window.getSelection(); if (!sel.rangeCount) return;
+  const r = sel.getRangeAt(0), ed = r.startContainer.parentElement?.closest?.('[data-ed]') || (r.startContainer.closest && r.startContainer.closest('[data-ed]'));
+  if (ed) { S.lastEd = ed.id; S.lastRange = r.cloneRange(); }
+});
+
+S.reqs.forEach(syncOrders);
+render();
+</script>
+</body>
+</html>
