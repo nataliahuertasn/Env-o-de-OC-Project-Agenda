@@ -1295,6 +1295,8 @@ function chipField(kind, item, r, o){
    EVENTOS
    ========================================================================= */
 function toast(msg, kind=''){
+  // Solo se muestran avisos de validación (warn); los mensajes de confirmación/información no se muestran
+  if (kind !== 'warn') return;
   const t = document.createElement('div'); t.className = `toast ${kind}`;
   t.innerHTML = `${ic(kind==='ok'?'check':'info')}<span>${msg}</span>`;
   $('#toasts').appendChild(t); setTimeout(() => t.remove(), 4200);
