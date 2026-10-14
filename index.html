@@ -301,7 +301,7 @@ table.ct input.cdate.bad{border-color:var(--danger);background:#fdecea}
 .sp-att .lb{font-weight:700;color:#777;font-size:13px}
 .sp-att .doclink{cursor:pointer;max-width:320px}
 .sp-file{border:1px solid #ccc;border-radius:4px;font-size:12px;padding:2px 4px;max-width:200px}
-.sp-foot{display:flex;justify-content:flex-end;padding:8px 22px 18px}
+.sp-foot{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;padding:8px 22px 18px}
 .sp-foot .btn{padding:6px 20px;font-size:13px}
 
 /* Purchases list (pantalla Requests de la aplicación) */
@@ -1247,7 +1247,7 @@ const MODAL = {
         <div class="sp-att"><span class="lb">Purchase Order:</span><a class="doclink" data-a="openOrder" data-i="${item.oi}" title="Open file">${ic('attach')}${esc(o.file)}</a>
           ${r.files.length > 1 ? `<select class="sp-file" data-c="poFile" data-i="${item.oi}" title="Archivo de ORDERS">${r.files.map(f => `<option ${f.file===o.file?'selected':''}>${esc(f.file)}</option>`).join('')}</select>` : ''}</div>
       </div>
-      <div class="sp-foot"><button class="btn" data-a="sendReview">Send</button></div></div>`; },
+      <div class="sp-foot"><button class="btn ghost" data-a="skipSend">Continue without sending PO</button><button class="btn" data-a="sendReview">Send</button></div></div>`; },
 
   review: m => { const r = req(S.reqId), send = S.modals.find(x => x.type === 'send');
     return `<div class="modal md">${mh('Review before sending')}<div class="mb">
@@ -1464,6 +1464,10 @@ const A = {
   sendTab: el => { sendModal().active = +el.dataset.k; S.dd = null; renderModals(); },
   // X: salir del formulario sin confirmación (la compra no cambia de estado)
   sendCancel: () => { S.modals = []; S.dd = null; render(); },
+  // Pasa la compra a In Transit sin enviar el correo; la OC queda pendiente y se puede enviar después
+  skipSend: () => { const r = req(S.reqId), prev = r.status;
+    r.status = 'In Transit'; S.modals = []; S.dd = null; render();
+    toast(prev === 'In Transit' ? 'La OC no fue enviada; queda pendiente.' : `Purchase ${r.id} pasó a <b>In Transit</b> sin enviar la OC al proveedor.`, 'ok'); },
   ddOpen: (el, e) => { const k = el.dataset.k;
     if (e.target.tagName === 'INPUT' && S.dd === k) return;
     S.dd = S.dd === k && el.classList.contains('caret') ? null : k; S.focus = `#in-${k}`; renderModals(); },
