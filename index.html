@@ -290,7 +290,7 @@ table.ct input.cdate.bad{border-color:var(--danger);background:#fdecea}
 .sp-f>label{display:block;font-size:10.5px;color:#777}
 .sp-f.cc .chipfield{min-height:70px;align-content:flex-start}
 .sendpo .chipfield{min-height:30px;padding:2px 24px 2px 0}
-.sendpo .chipfield input{min-width:120px;font-size:13px}
+.sendpo .chipfield > input{min-width:120px;font-size:13px}
 .sendpo .ec{background:#eef1f5;border:0;border-radius:14px;padding:2px 4px 2px 10px;font-size:12px}
 .sendpo .subj{font-size:12.5px;padding:3px 0 5px}
 .sp-msg{margin-top:6px}
@@ -510,7 +510,7 @@ table.ct input.bad{border-color:var(--danger);background:#fdecea}
 .mfield>label{font-size:10.5px;color:#777;display:flex;justify-content:space-between;gap:6px}
 .mfield>label .src{color:var(--primary);font-size:10.5px}
 .chipfield{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:34px;padding:4px 26px 4px 0;cursor:text;position:relative}
-.chipfield input{border:0;outline:0;min-width:160px;flex:1;padding:4px 0;font-size:13px}
+.chipfield > input{border:0;outline:0;min-width:160px;flex:1;padding:4px 0;font-size:13px}
 .chipfield .caret{position:absolute;right:0;top:8px;color:#666;border:0;background:none;padding:0}
 .ec{display:inline-flex;align-items:center;gap:6px;background:#eef3fb;border:1px solid #d3e1f5;border-radius:16px;padding:2px 4px 2px 3px;font-size:12px;max-width:100%}
 .ec .avatar{width:20px;height:20px;font-size:9px;background:#c7dbf5;color:#0d47a1}
@@ -1282,7 +1282,7 @@ function chipField(kind, item, r, o){
   if (S.dd === kind){
     const sids = reqSuppliers(r);
     // Solo los contactos del proveedor de esta OC (no se puede dirigir a otros proveedores)
-    const groups = [[`Contactos de ${sup(o.sup).name}`, [o.sup]]];
+    const groups = [[`Contactos del cliente`, [o.sup]]];
     // Personal de ES Metals disponible para copia: todos los usuarios internos + Warehouse
     const internal = kind === 'cc' ? [...Object.values(USERS), {name:'Warehouse', email:WAREHOUSE, role:'Almacén'}] : [];
     dd = `<div class="dd">${kind==='cc' ? `<div class="g">Internos ES Metals</div>${internal.map(u => `<div class="o" data-a="ddPick" data-k="cc" data-e="${esc(u.email)}"><input type="checkbox" ${vals.includes(u.email)?'checked':''} tabindex="-1"><b>${esc(u.name)}</b><span class="em">${esc(u.email)}</span><span class="sp">${esc(u.role)}</span></div>`).join('')}` : ''}
