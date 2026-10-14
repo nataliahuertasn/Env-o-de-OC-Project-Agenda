@@ -1288,7 +1288,7 @@ function chipField(kind, item, r, o){
     dd = `<div class="dd">${kind==='cc' ? `<div class="g">Usuarios ES Metals</div>${internal.map(u => `<div class="o" data-a="ddPick" data-k="cc" data-e="${esc(u.email)}"><input type="checkbox" ${vals.includes(u.email)?'checked':''} tabindex="-1"><b>${esc(u.name)}</b><span class="em">${esc(u.email)}</span><span class="sp">${esc(u.role)}</span></div>`).join('')}` : ''}
       ${groups.filter(g => g[1].length).map(([g, ids]) => `<div class="g">${esc(g)}</div>${ids.map(id => sup(id).contacts.map(c => `<div class="o" data-a="ddPick" data-k="${kind}" data-e="${esc(c.email)}"><input type="checkbox" ${vals.includes(c.email)?'checked':''} tabindex="-1"><b>${esc(c.name)}</b><span class="em">${esc(c.email)}</span><span class="sp">${esc(c.role||'')}</span></div>`).join('')).join('')}`).join('')}</div>`;
   }
-  return `<div class="chipfield dd-wrap" data-a="ddOpen" data-k="${kind}">${chips}<input id="in-${kind}" data-kd="${kind}" placeholder="Escriba un correo externo y presione Enter"><button class="caret" data-a="ddOpen" data-k="${kind}" tabindex="-1">${ic('down')}</button>${dd}</div>`;
+  return `<div class="chipfield dd-wrap" data-a="ddOpen" data-k="${kind}">${chips}<input id="in-${kind}" data-kd="${kind}"><button class="caret" data-a="ddOpen" data-k="${kind}" tabindex="-1">${ic('down')}</button>${dd}</div>`;
 }
 
 /* =========================================================================
