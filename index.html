@@ -301,6 +301,13 @@ table.ct input.cdate.bad{border-color:var(--danger);background:#fdecea}
 .sp-att .lb{font-weight:700;color:#777;font-size:13px}
 .sp-att .doclink{cursor:pointer;max-width:320px}
 .sp-file{border:1px solid #ccc;border-radius:4px;font-size:12px;padding:2px 4px;max-width:200px}
+/* Barra de carga mientras se envía la OC */
+.modal.sendpo{position:relative;overflow:hidden}
+.loadbar{position:absolute;top:0;left:0;right:0;height:4px;background:#d6e6f8;overflow:hidden;z-index:5}
+.loadbar span{position:absolute;top:0;bottom:0;width:40%;background:var(--primary);animation:loadbar 1.1s ease-in-out infinite}
+@keyframes loadbar{0%{left:-40%}100%{left:100%}}
+@media (prefers-reduced-motion: reduce){.loadbar span{animation:none;left:0;width:100%}}
+.sendpo.is-sending .mb{pointer-events:none;opacity:.7}
 .sp-foot{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;padding:8px 22px 18px}
 .sp-foot .btn{padding:6px 20px;font-size:13px}
 
@@ -1238,7 +1245,7 @@ const MODAL = {
 
   // Pág. 7 del PDF: "Send Purchase Order" — To, Cc, Subject, Message, Purchase Order y SEND
   send: m => { const r = req(S.reqId), item = m.items[m.active], o = r.orders[item.oi];
-    return `<div class="modal sendpo">${mh('Send Purchase Order', 'sendCancel')}
+    return `<div class="modal sendpo ${m.sending?'is-sending':''}">${m.sending?'<div class="loadbar"><span></span></div>':''}${mh('Send Purchase Order', 'sendCancel')}
       <div class="mb">
         <div class="sp-f"><label>To:</label>${chipField('to', item, r, o)}</div>
         <div class="sp-f cc"><label>Cc:</label>${chipField('cc', item, r, o)}</div>
@@ -1247,7 +1254,7 @@ const MODAL = {
         <div class="sp-att"><span class="lb">Purchase Order:</span><a class="doclink" data-a="openOrder" data-i="${item.oi}" title="Open file">${ic('attach')}${esc(o.file)}</a>
           ${r.files.length > 1 ? `<select class="sp-file" data-c="poFile" data-i="${item.oi}" title="Archivo de ORDERS">${r.files.map(f => `<option ${f.file===o.file?'selected':''}>${esc(f.file)}</option>`).join('')}</select>` : ''}</div>
       </div>
-      <div class="sp-foot"><button class="btn ghost" data-a="skipSend">Continue without sending PO</button><button class="btn" data-a="sendReview">Send</button></div></div>`; },
+      <div class="sp-foot"><button class="btn ghost" data-a="skipSend" ${m.sending?'disabled':''}>Continue without sending PO</button><button class="btn" data-a="sendReview" ${m.sending?'disabled':''}>${m.sending?'Sending…':'Send'}</button></div></div>`; },
 
   review: m => { const r = req(S.reqId), send = S.modals.find(x => x.type === 'send');
     return `<div class="modal md">${mh('Review before sending')}<div class="mb">
@@ -1487,10 +1494,11 @@ const A = {
     const m = sendModal(), bad = m.items.findIndex(it => !it.to.length);
     if (bad >= 0){ m.active = bad; renderModals(); return toast('Cada correo debe tener al menos un destinatario en <b>To</b>', 'warn'); }
     if (m.items.some(it => !it.subject.trim())) return toast('El asunto es obligatorio', 'warn');
-    S.dd = null; openModal({type:'review'});
+    S.dd = null; A.sendConfirm();   // SEND envía directamente desde el formulario (sin ventana de revisión)
   },
   sendConfirm: () => {
-    S.modals.pop(); openModal({type:'sending'});
+    const sm = sendModal(); if (sm.sending) return;
+    sm.sending = true; renderModals();   // barra de carga en la parte superior del formulario
     setTimeout(() => {
       const r = req(S.reqId), m = sendModal(), prev = r.status, sent = [];
       m.items.forEach(it => {
