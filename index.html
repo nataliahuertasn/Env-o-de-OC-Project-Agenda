@@ -1487,10 +1487,11 @@ const A = {
     const m = sendModal(), bad = m.items.findIndex(it => !it.to.length);
     if (bad >= 0){ m.active = bad; renderModals(); return toast('Cada correo debe tener al menos un destinatario en <b>To</b>', 'warn'); }
     if (m.items.some(it => !it.subject.trim())) return toast('El asunto es obligatorio', 'warn');
-    S.dd = null; openModal({type:'review'});
+    S.dd = null; A.sendConfirm();   // SEND envía directamente (sin ventana de revisión)
   },
   sendConfirm: () => {
-    S.modals.pop(); openModal({type:'sending'});
+    if (topModal()?.type === 'review') S.modals.pop();
+    openModal({type:'sending'});
     setTimeout(() => {
       const r = req(S.reqId), m = sendModal(), prev = r.status, sent = [];
       m.items.forEach(it => {
